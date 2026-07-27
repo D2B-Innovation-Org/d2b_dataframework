@@ -352,7 +352,7 @@ class GoogleSearchConsole:
             paginated_query["startRow"] = start_row
             paginated_query["rowLimit"] = self.row_limit
 
-            self.logger.info(
+            self.logger.debug(
                 f"Querying from row {start_row} with limit {self.row_limit}"
             )
 
