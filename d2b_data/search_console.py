@@ -25,8 +25,8 @@ class GoogleSearchConsole:
 
     def __init__(
         self,
-        client_secret: str | None,
-        token_json: str | None,
+        client_secret: str | None = None,
+        token_json: str | None = None,
         verbose_logger: (WorkflowLogger | None) = None,
         auto_paginate: bool = True,
         row_limit: int = 25_000,
