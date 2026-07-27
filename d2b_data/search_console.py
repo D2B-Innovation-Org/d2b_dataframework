@@ -111,7 +111,7 @@ class GoogleSearchConsole:
 
     def create_service(
         self,
-        secrets: str,
+        secrets: str | None,
         credentials: str | None,
         use_service_account: bool = False,
     ) -> Resource:
