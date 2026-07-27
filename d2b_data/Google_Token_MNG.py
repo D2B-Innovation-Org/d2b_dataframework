@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import webbrowser
@@ -56,7 +57,17 @@ class Google_Token_MNG:
 
     def open_json(self, filename: str) -> str:
         with open(filename, "r", encoding="utf-8") as file:
-            return file.read()
+            content = file.read()
+
+        try:
+            decoded_content = json.loads(content)
+        except json.JSONDecodeError:
+            return content
+
+        if isinstance(decoded_content, str):
+            return decoded_content
+
+        return content
 
     def get_credentials(
         self,
