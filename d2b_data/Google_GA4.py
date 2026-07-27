@@ -13,8 +13,8 @@ import d2b_data.Google_Token_MNG
 class Google_GA4:
     def __init__(
         self,
-        client_secret: str,
-        token_json: str,
+        client_secret: str | None = None,
+        token_json: str | None = None,
         debug: bool = False,
         auto_paginate: bool = True,
         extract_sampling: bool = False,
@@ -25,10 +25,8 @@ class Google_GA4:
         self.default_version = "v1beta"
         self.client_secret = client_secret
         self.debug_status = debug
-        self.auto_paginate = auto_paginate  # Paginación automática activada por defecto
-        self.extract_sampling = (
-            extract_sampling  # Sampling info desactivada por defecto
-        )
+        self.auto_paginate = auto_paginate
+        self.extract_sampling = extract_sampling
         self.intraday_limit = intraday_limit * 100000
         self.service = self.create_service(
             self.client_secret, token_json, use_service_account

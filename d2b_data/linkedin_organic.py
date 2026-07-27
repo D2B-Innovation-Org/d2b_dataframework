@@ -65,10 +65,6 @@ class LinkedinOrganic:
                 "generate and save a new token."
             )
 
-    # ------------------------------------------------------------------
-    # Logger
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _build_default_logger() -> object:
         """Build a stdlib-based fallback logger with .log() and .critical()."""
@@ -84,10 +80,6 @@ class LinkedinOrganic:
                 logger.error(message)
 
         return _Adapter()
-
-    # ------------------------------------------------------------------
-    # Auth internals
-    # ------------------------------------------------------------------
 
     def _load_token_from_file(self) -> Optional[dict]:
         """Read token JSON from disk and set self.token."""

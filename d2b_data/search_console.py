@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import copy
+import logging
 import random
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
@@ -11,9 +12,10 @@ from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 
 import d2b_data.Google_Token_MNG
+from d2b_data.workflow_logger import WorkflowLogger
 
 
-class Google_Search_Console:
+class GoogleSearchConsole:
     """
     Wrapper for the Google Search Console API.
 
@@ -25,43 +27,42 @@ class Google_Search_Console:
         self,
         client_secret: str,
         token_json: str | None,
-        debug: bool = False,
+        verbose_logger: (WorkflowLogger | None) = None,
         auto_paginate: bool = True,
         row_limit: int = 25_000,
         use_service_account: bool = False,
     ) -> None:
         """
-        Initializes the Google Search Console API wrapper.
 
+        Initializes the Google Search Console API wrapper.
         Args:
             client_secret:
                 OAuth client secret path or Service Account JSON path.
-
             token_json:
                 OAuth token path. It can be None when using a Service Account.
-
-            debug:
-                Enables debug messages.
-
+            verbose_logger:
+                WorkflowLogger instance used during execution. If omitted,
+                an internal logger with alerts disabled is created.
             auto_paginate:
                 Enables automatic pagination.
-
             row_limit:
                 Maximum number of rows requested per API call.
-
             use_service_account:
                 Indicates whether Service Account authentication should be used.
         """
         self.default_api_name: str = "searchconsole"
         self.default_version: str = "v1"
-
         self.client_secret: str = client_secret
         self.token_json: str | None = token_json
-
-        self.debug_status: bool = debug
         self.auto_paginate: bool = auto_paginate
         self.row_limit: int = row_limit
         self.use_service_account: bool = use_service_account
+        self.logger: WorkflowLogger = verbose_logger or self._build_default_logger()
+
+        self.logger.info(
+            "--- EXECUTING Google_Search_Console Class v1.0 "
+            f"- Initialized at {datetime.now(UTC).isoformat()} ---"
+        )
 
         self.service: Resource = self.create_service(
             secrets=self.client_secret,
@@ -72,7 +73,6 @@ class Google_Search_Console:
     def get_service(self) -> Resource:
         """
         Returns the Search Console API service object.
-
         Returns:
             Authenticated Search Console API resource.
         """
@@ -81,7 +81,6 @@ class Google_Search_Console:
     def get_token(self) -> str | None:
         """
         Returns the configured OAuth token path.
-
         Returns:
             OAuth token path or None.
         """
@@ -93,19 +92,17 @@ class Google_Search_Console:
     ) -> bool:
         """
         Enables or disables automatic pagination.
-
         Args:
             auto_paginate:
                 New automatic pagination status.
-
         Returns:
             Current automatic pagination status.
-
         Raises:
             TypeError:
                 If auto_paginate is not a boolean.
         """
         if not isinstance(auto_paginate, bool):
+            self.logger.critical("auto_paginate must be a boolean")
             raise TypeError("auto_paginate must be a boolean")
 
         self.auto_paginate = auto_paginate
@@ -120,19 +117,14 @@ class Google_Search_Console:
     ) -> Resource:
         """
         Creates the Google Search Console API service object.
-
         Authentication is delegated to the internal Google_Token_MNG wrapper.
-
         Args:
             secrets:
                 OAuth client secret path or Service Account JSON path.
-
             credentials:
                 OAuth token path. It can be None when using a Service Account.
-
             use_service_account:
                 Indicates whether Service Account authentication should be used.
-
         Returns:
             Authenticated Search Console API resource.
         """
@@ -149,20 +141,9 @@ class Google_Search_Console:
 
         service: Resource = token_mng.get_service()
 
-        self.debug("Connected to Google Search Console")
+        self.logger.info("Connected to Google Search Console")
 
         return service
-
-    def debug(self, message: str) -> None:
-        """
-        Prints a debug message when debug mode is enabled.
-
-        Args:
-            message:
-                Message to print.
-        """
-        if self.debug_status:
-            print(message)
 
     def get_report_df(
         self,
@@ -181,22 +162,16 @@ class Google_Search_Console:
             property_uri:
                 Search Console property URI, such as
                 "sc-domain:example.com" or "https://example.com/".
-
             start_date:
                 Report start date in YYYY-MM-DD format.
-
             end_date:
                 Report end date in YYYY-MM-DD format.
-
             dimensions:
                 Dimensions included in the report.
-
             dimension_filter_groups:
                 Optional Search Console dimension filters.
-
             search_type:
                 Search type, such as web, image, video or news.
-
             data_state:
                 Data state requested from Search Console.
 
@@ -252,23 +227,17 @@ class Google_Search_Console:
     ) -> dict[str, Any]:
         """
         Creates the request body for the Search Console API.
-
         Args:
             start_date:
                 Report start date.
-
             end_date:
                 Report end date.
-
             dimensions:
                 Dimensions included in the report.
-
             dimension_filter_groups:
                 Optional dimension filters.
-
             search_type:
                 Search result type.
-
             data_state:
                 Requested data state.
 
@@ -301,13 +270,10 @@ class Google_Search_Console:
         Args:
             property_uri:
                 Search Console property URI.
-
             query:
                 Search Console request body.
-
         Returns:
             Raw Search Console API response.
-
         Raises:
             HttpError:
                 If the API returns a non-recoverable error or the maximum
@@ -334,18 +300,20 @@ class Google_Search_Console:
                 reason: str = error._get_reason()
 
                 if status_code not in {429, 500, 502, 503, 504}:
-                    self.debug(f"Non-recoverable error {status_code}: {reason}")
+                    self.logger.critical(
+                        f"Non-recoverable error {status_code}: {reason}"
+                    )
                     raise
 
                 if retry_count >= max_retries:
-                    self.debug(
+                    self.logger.critical(
                         f"Error {status_code} ({reason}): maximum retries exceeded."
                     )
                     raise
 
                 sleep_time: float = (2**retry_count) + random.uniform(0, 1)
 
-                self.debug(
+                self.logger.info(
                     f"Error {status_code}. "
                     f"Retry {retry_count + 1}/{max_retries}. "
                     f"Waiting {sleep_time:.2f} seconds."
@@ -384,7 +352,9 @@ class Google_Search_Console:
             paginated_query["startRow"] = start_row
             paginated_query["rowLimit"] = self.row_limit
 
-            self.debug(f"Querying from row {start_row} with limit {self.row_limit}")
+            self.logger.info(
+                f"Querying from row {start_row} with limit {self.row_limit}"
+            )
 
             response: dict[str, Any] = self._get_report_raw(
                 property_uri=property_uri,
@@ -409,7 +379,7 @@ class Google_Search_Console:
             start_row += self.row_limit
 
         if not all_dataframes:
-            self.debug("No data found for the specified period.")
+            self.logger.info("No data found for the specified period.")
             return self._empty_df(dimensions)
 
         result_df: pd.DataFrame = pd.concat(
@@ -417,7 +387,7 @@ class Google_Search_Console:
             ignore_index=True,
         )
 
-        self.debug(f"Total rows obtained: {len(result_df)}")
+        self.logger.info(f"Total rows obtained: {len(result_df)}")
 
         return result_df
 
@@ -506,13 +476,10 @@ class Google_Search_Console:
         Args:
             property_uri:
                 Search Console property URI.
-
             start_date:
                 Report start date.
-
             end_date:
                 Report end date.
-
             dimensions:
                 Dimensions requested in the report.
 
@@ -544,3 +511,18 @@ class Google_Search_Console:
 
         if parsed_start_date > parsed_end_date:
             raise ValueError("start_date cannot be greater than end_date")
+
+    @staticmethod
+    def _build_default_logger() -> logging.Logger:
+        logger = logging.getLogger("GoogleSearchConsole")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        if not logger.handlers:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_handler.setFormatter(logging.Formatter("%(message)s"))
+
+            logger.addHandler(console_handler)
+
+        return logger
