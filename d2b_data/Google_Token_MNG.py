@@ -1,112 +1,208 @@
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
-from oauth2client import client
-from builtins import input
-from google_auth_oauthlib import flow
-from oauth2client.client import GoogleCredentials
-
-import httplib2
-import google.auth
-import webbrowser
 import os
-import json
 import time
- 
-class Google_Token_MNG():
-  '''
+import webbrowser
 
-  '''
-  def __init__(self,client_secret=None,token=None,api_name=None,api_version=None,scopes = None, use_service_account=False):
-    self.scopes         = scopes
-    self.client_secret  = client_secret
-    self.token          = token
-    self.api_name       = api_name
-    self.version        = api_version
-    self.use_sa         = use_service_account
-    self.service        = self.create_api     (  api_name    = self.api_name,
-                                                api_version  = self.version,
-                                                secrets      = self.client_secret,
-                                                credentials  = self.token, 
-                                                scopes       = self.scopes,
-                                                use_sa       = self.use_sa)
-
-  def saveJson(self,filename, object):
-      with open(filename, 'w') as f:
-          json.dump(object, f)
+import google.auth
+import httplib2
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from oauth2client import client
 
 
-  def openJson(self,filename):
-      with open(filename, 'r') as f:
-          object = json.load(f)
-      return object
+class Google_Token_MNG:
+    """
+    Manages authentication and creates authenticated Google API service objects.
 
-  def getCredentials(self, secrets, credentials, scopes, allow_adc=False):
-    # 1. PRIORIDAD ABSOLUTA: Si existe el archivo de credenciales, usarlo siempre.
-    if os.path.isfile(credentials):
-        return client.Credentials.new_from_json(self.openJson(credentials))
+    This class centralizes all supported authentication mechanisms used across
+    the project, including:
 
-    # 2. Si no hay archivo, validamos si estamos en Cloud Run
-    if os.environ.get('K_SERVICE'):
-        if allow_adc:
-            # Obtiene las ADC usando la misma librería oauth2client para evitar incompatibilidades
-            print("Usando Application Default Credentials (ADC) en Cloud Run...")
-            return GoogleCredentials.get_application_default()
-        else:
-            raise RuntimeError(
-                "¡Error Crítico! No se encontró el archivo de credenciales en Cloud Run y "
-                "allow_adc es False. No se puede iniciar un flujo interactivo en la nube."
+    - OAuth2 using a stored user token.
+    - Interactive OAuth2 flow to generate a new token when one does not exist.
+    - Service Account authentication.
+    - Application Default Credentials (ADC) for Google Cloud environments.
+
+    The resulting authenticated service can be retrieved through `get_service()`
+    and reused by API wrapper classes such as Google_GA4 and
+    GoogleSearchConsole.
+    """
+
+    def __init__(
+        self,
+        client_secret: str | None,
+        token: str | None,
+        api_name: str,
+        api_version: str,
+        scopes: list[str] | None,
+        use_service_account: bool = False,
+    ):
+        self.scopes = scopes
+        self.client_secret = client_secret
+        self.token = token
+        self.api_name = api_name
+        self.version = api_version
+        self.use_sa = use_service_account
+        self.service = self.create_api(
+            api_name=self.api_name,
+            api_version=self.version,
+            secrets=self.client_secret,
+            credentials=self.token,
+            scopes=self.scopes,
+            use_sa=self.use_sa,
+        )
+
+    def save_json(self, filename: str, content: str) -> None:
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(content)
+
+    def open_json(self, filename: str) -> str:
+        with open(filename, "r", encoding="utf-8") as file:
+            return file.read()
+
+    def get_credentials(
+        self,
+        secrets: str | None,
+        credentials: str,
+        scopes: list[str],
+    ):
+        """
+        Retrieves OAuth2 credentials required to authenticate with a Google API.
+
+        The method follows this authentication order:
+
+        1. Loads an existing OAuth token when the credentials file exists.
+        2. Starts an interactive OAuth flow when no token file exists.
+        3. Saves the newly generated token at the credentials path.
+
+        Args:
+            secrets (str | None):
+                Path to the OAuth client secret JSON file. Required only when
+                the token file does not already exist.
+
+            credentials (str):
+                Path where the OAuth token is loaded from or saved.
+
+            scopes (list[str]):
+                OAuth scopes required to access the Google API.
+
+        Returns:
+            oauth2client.client.Credentials:
+                Credentials that can authorize requests to Google APIs.
+
+        Raises:
+            ValueError:
+                If the token does not exist and no client secret file is provided.
+        """
+        if os.path.isfile(credentials):
+            return client.Credentials.new_from_json(self.open_json(credentials))
+
+        print("OAuth token not found. Starting authentication flow...")
+
+        if not secrets:
+            raise ValueError(
+                "A client secret file is required because the OAuth token does not exist."
             )
 
-    # 3. Solo si NO estamos en Cloud Run y NO hay archivo, iniciamos el flujo interactivo local
-    flow = client.flow_from_clientsecrets(
-        secrets,
-        scope=scopes,
-        redirect_uri='urn:ietf:wg:oauth:2.0:oob'
-    )
-    auth_uri = flow.step1_get_authorize_url()
-    print("Por favor, visita esta URL para autorizar la aplicación:\n{}".format(auth_uri))
+        flow = client.flow_from_clientsecrets(
+            secrets, scope=scopes, redirect_uri="urn:ietf:wg:oauth:2.0:oob"
+        )
+        auth_uri = flow.step1_get_authorize_url()
+        print(f"Please, visit url and authorize token:\n{auth_uri}")
 
-    try:
-        webbrowser.open(auth_uri)
-    except Exception as e:
-        print(f"No se pudo abrir el navegador automáticamente: {e}")
+        if not webbrowser.open(auth_uri):
+            print("Could not open the web browser correctly")
 
-    time.sleep(3)
-    auth_code = input('\nIngresa el código de autorización: ')
-    time.sleep(3)
-    
-    cre = flow.step2_exchange(auth_code)
+        time.sleep(3)
+        auth_code = input("\nIngresa el código de autorización: ")
+        time.sleep(3)
 
-    if credentials:
-        self.saveJson(credentials, cre.to_json())
-    
-    return cre
+        creds = flow.step2_exchange(auth_code)
 
-  def create_api(self, api_name, api_version, scopes=None, secrets=None, credentials=None, use_sa=False):
-    """
-    Crea el servicio de Google. Dirige el tráfico según el tipo de autenticación.
-    """
-    # FLUJO 1: Cuentas de Servicio (Service Account / ADC) -> Librería Moderna
-    if use_sa:
-        if secrets and os.path.exists(secrets):
-            creds = service_account.Credentials.from_service_account_file(
-                secrets,
-                scopes=scopes
+        self.save_json(credentials, creds.to_json())
+
+        return creds
+
+    def create_api(
+        self,
+        api_name: str,
+        api_version: str,
+        scopes: list[str] | None = None,
+        secrets: str | None = None,
+        credentials: str | None = None,
+        use_sa: bool = False,
+    ):
+        """
+        Creates an authenticated Google API service.
+
+        Depending on the authentication parameters, the method supports the
+        following authentication flows:
+
+        1. Service Account or Application Default Credentials (ADC).
+        2. OAuth2 using an existing user token or generating a new one if needed.
+        3. Public APIs that do not require authentication.
+
+        Args:
+            api_name (str):
+                Name of the Google API to connect to.
+
+            api_version (str):
+                Version of the Google API.
+
+            scopes (list[str] | None):
+                OAuth scopes required by the API.
+
+            secrets (str | None):
+                Path to the client secret JSON file for OAuth authentication or
+                the Service Account key file when using a Service Account.
+
+            credentials (str | None):
+                Path to the OAuth token file.
+
+            use_sa (bool, optional):
+                Whether to authenticate using a Service Account or Application
+                Default Credentials. Defaults to False.
+
+        Returns:
+            googleapiclient.discovery.Resource:
+                An authenticated Google API service object.
+        """
+
+        if use_sa:
+            if secrets and os.path.exists(secrets):
+                creds = service_account.Credentials.from_service_account_file(
+                    secrets, scopes=scopes
+                )
+            else:
+                creds, project = google.auth.default(scopes=scopes)
+                print(f"Using ADC Credentials. Project detected: {project}")
+
+            return build(
+                api_name, api_version, credentials=creds, cache_discovery=False
             )
-        else:
-            creds, project = google.auth.default(scopes=scopes)
-            print(f"Usando ADC (Cloud Run/Functions). Proyecto detectado: {project}")
-            
-        return build(api_name, api_version, credentials=creds, cache_discovery=False)
-    
-    # FLUJO 2: APIs públicas (sin credenciales y sin scopes específicos)
-    if not use_sa and None in (secrets, credentials, scopes):
-            return build(api_name, api_version)
-    
-    # FLUJO 3: Usuario Final (OAuth2) -> Librería Legacy
-    creds = self.getCredentials(secrets, credentials, scopes)
-    http_auth = creds.authorize(httplib2.Http())
-    return build(api_name, api_version, http=http_auth)
 
-  def get_service(self):
-    return self.service
+        if credentials:
+            if not scopes:
+                raise ValueError("scopes are required when using OAuth authentication.")
+
+            creds = self.get_credentials(
+                secrets=secrets,
+                credentials=credentials,
+                scopes=scopes,
+            )
+
+            http_auth = creds.authorize(httplib2.Http())
+
+            return build(
+                api_name,
+                api_version,
+                http=http_auth,
+                cache_discovery=False,
+            )
+
+        return build(
+            api_name,
+            api_version,
+            cache_discovery=False,
+        )
+
+    def get_service(self):
+        return self.service
