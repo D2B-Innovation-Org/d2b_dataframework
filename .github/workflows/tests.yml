@@ -9,20 +9,74 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: Install dependencies
         run: |
-          pip install -e .
-          pip install pytest pytest-mock pytest-cov
+          pip install -e ".[dev]"
 
       - name: Run tests
         run: |
           pytest --cov=d2b_data --cov-report=term-missing -v
+
+  # Verifica que el paquete se pueda construir e instalar de verdad.
+  # `pip install -e .` esconde errores de empaquetado (archivos que no
+  # entran al wheel, metadata inválida) porque lee el código desde el repo.
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build sdist and wheel
+        run: |
+          pip install build twine
+          python -m build
+
+      - name: Validate metadata
+        run: python -m twine check dist/*
+
+      - name: Install the built wheel and import every module
+        run: |
+          pip install dist/*.whl
+          python - <<'PY'
+          import importlib
+          import pkgutil
+
+          import d2b_data
+
+          print("d2b_data", d2b_data.__version__)
+          failed = []
+          for module in pkgutil.iter_modules(d2b_data.__path__):
+              name = f"d2b_data.{module.name}"
+              try:
+                  importlib.import_module(name)
+                  print("ok", name)
+              except Exception as exc:
+                  failed.append(f"{name}: {exc.__class__.__name__}: {exc}")
+          if failed:
+              raise SystemExit("Modules failed to import:\n" + "\n".join(failed))
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

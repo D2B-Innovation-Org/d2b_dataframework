@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "d2b_data"
+version = "0.3.0"
+description = "Data framework to extract, transform and forecast marketing data from multiple APIs."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "D2B Innovation", email = "tools@d2b.cl" }]
+keywords = ["marketing", "analytics", "etl", "ga4", "bigquery", "forecasting"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+# Núcleo: todo lo que los módulos importan en su nivel superior.
+# Si una de estas falta, `import d2b_data.<modulo>` revienta.
+dependencies = [
+    "pandas",
+    "requests",
+    "httplib2",
+    "oauth2client",
+    "google-api-python-client",
+    "google-auth-oauthlib",
+    "google-analytics-data",
+    "google-cloud-bigquery",
+    "google-cloud-core",
+    "pandas-gbq",
+    "requests-oauthlib",
+    "tenacity",
+    "tqdm",
+    "unidecode",
+    "facebook_business",
+    "twitter-ads",
+    "serpapi",
+]
+
+[project.optional-dependencies]
+# Prophet compila Stan: es lento y pesado, por eso queda fuera del núcleo.
+# ProphetForecaster lo importa de forma diferida y avisa si falta.
+forecasting = ["prophet"]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "pytest-cov",
+    "build",
+    "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/D2b-Innovation/d2b_dataframework"
+Repository = "https://github.com/D2b-Innovation/d2b_dataframework"
+Issues = "https://github.com/D2b-Innovation/d2b_dataframework/issues"
+
+[tool.setuptools.packages.find]
+include = ["d2b_data*"]

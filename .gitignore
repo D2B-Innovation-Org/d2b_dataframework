@@ -32,6 +32,12 @@ wheels/
 venv
 ENV
 
+# Test & coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
 # Credentials & Secrets (Muy importante para tu Framework)
 *.json
 *.log

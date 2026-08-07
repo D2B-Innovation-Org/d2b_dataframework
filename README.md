@@ -11,19 +11,29 @@ A robust Python framework designed for managing and integrating data operations 
 
 ## 🛠 Installation
 
-### 1. Clone the Repository
-```bash
-git clone [https://github.com/D2b-Innovation/d2b_dataframework.git](https://github.com/D2b-Innovation/d2b_dataframework.git)
-cd d2b_dataframework
-pip install -r requirements.txt
+Requires **Python 3.11+**.
 
+### 1. Install via `pip` (Directly from GitHub)
+
+```bash
+pip install git+https://github.com/D2b-Innovation/d2b_dataframework.git
 ```
 
-### 2. Install via `pip` (Directly from GitHub)
+### 2. Optional extras
+
+Forecasting is optional because Prophet compiles Stan and takes a while to install:
 
 ```bash
-pip install git+[https://github.com/D2b-Innovation/d2b_dataframework.git](https://github.com/D2b-Innovation/d2b_dataframework.git)
+pip install "d2b_data[forecasting] @ git+https://github.com/D2b-Innovation/d2b_dataframework.git"
+```
 
+### 3. Local development
+
+```bash
+git clone https://github.com/D2b-Innovation/d2b_dataframework.git
+cd d2b_dataframework
+pip install -e ".[dev]"
+pytest
 ```
 
 ---
@@ -75,6 +85,45 @@ print(df.head())
 ```
 
 Requires a Page Access Token with `pages_read_engagement` and `read_insights` permissions.
+
+### Forecasting (Prophet)
+
+Basic usage — one line, no configuration. Every numeric column is forecasted:
+
+```python
+from d2b_data.ProphetForecaster import ProphetForecaster
+
+# df: a 'date' (or 'fecha') column + numeric metric columns
+fc = ProphetForecaster(df)
+predictions = fc.get_forecast(30)   # 30 days ahead
+```
+
+Advanced usage — `forecast()` exposes the full Prophet configuration:
+
+```python
+fc = ProphetForecaster(df, verbose=False)
+
+predictions = fc.forecast(
+    days=12,
+    metrics=['sessions'],            # forecast only these columns
+    freq='W',                        # weekly periods instead of daily
+    include_history=False,           # only future dates
+    include_intervals=True,          # adds sessions_lower / sessions_upper
+    interval_width=0.95,
+    seasonality_mode='multiplicative',
+    changepoint_prior_scale=0.5,     # more reactive trend
+    country_holidays='CL',
+    custom_seasonalities=[{'name': 'monthly', 'period': 30.5, 'fourier_order': 5}],
+    regressors=['spend'],            # external driver, not forecasted
+    future_regressors=planned_spend, # its future values ('date' + 'spend')
+    non_negative=True,               # clip negative predictions to 0
+)
+```
+
+Other options: `growth='logistic'` with `cap`/`floor`, a custom `holidays` DataFrame,
+`round_decimals`, and `prophet_kwargs` for anything else in the Prophet constructor.
+
+Models can be reused: `save_models()`, `load_models()` and `predict_from_loaded_models()`.
 
 ---
 
