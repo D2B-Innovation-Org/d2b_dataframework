@@ -101,10 +101,6 @@ class WorkflowLogger:
         if self.alerts_enabled and send_alert:
             self._send_alert(message)
 
-    def set_workflow_name(self, workflow_name: str) -> None:
-        self.workflow_name = workflow_name
-        self.logger.name = workflow_name
-
     def _send_alert(self, message: str) -> None:
         if not self.webhook_url:
             self.logger.warning(
