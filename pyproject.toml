@@ -43,7 +43,6 @@ dependencies = [
     "unidecode",
     "facebook_business",
     "twitter-ads",
-    "serpapi",
 ]
 
 [project.optional-dependencies]
@@ -65,3 +64,7 @@ Issues = "https://github.com/D2b-Innovation/d2b_dataframework/issues"
 
 [tool.setuptools.packages.find]
 include = ["d2b_data*"]
+# namespaces=false exige __init__.py para considerar algo un paquete, igual que
+# el find_packages() del setup.py anterior. Sin esto, d2b_data/legacy/ se cuela
+# en el wheel como namespace package.
+namespaces = false

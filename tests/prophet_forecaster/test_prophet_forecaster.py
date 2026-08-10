@@ -5,64 +5,64 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from d2b_data.ProphetForecaster import ProphetForecaster
+    from d2b_data.prophet_forecaster import ProphetForecaster
 
 
-# --------------------------------------------------------------------- #
-# Construcción y validación de datos
-# --------------------------------------------------------------------- #
-def test_instance_is_created_correctly(df_metrics):
-    """The object starts empty and keeps a reference to the source DataFrame."""
-    fc = ProphetForecaster(df_metrics)
-    assert fc.df_beforepredict is df_metrics
-    assert fc.verbose is True
-    assert fc.models == {}
-    assert fc.forecasts == {}
-    assert fc.last_params == {}
-    assert fc.df_ready is None
-    assert fc.df_postpredict is None
+    # --------------------------------------------------------------------- #
+    # Construcción y validación de datos
+    # --------------------------------------------------------------------- #
+    def test_instance_is_created_correctly(df_metrics):
+        """The object starts empty and keeps a reference to the source DataFrame."""
+        fc = ProphetForecaster(df_metrics)
+        assert fc.df_beforepredict is df_metrics
+        assert fc.verbose is True
+        assert fc.models == {}
+        assert fc.forecasts == {}
+        assert fc.last_params == {}
+        assert fc.df_ready is None
+        assert fc.df_postpredict is None
 
 
-def test_data_validation_renames_date_column(forecaster):
-    """The 'date' column is renamed to 'ds' and parsed as datetime."""
-    metrics = forecaster._data_validation(forecaster.df_beforepredict)
-    assert list(forecaster.df_ready.columns) == ['ds', 'sessions', 'conversions', 'spend']
-    assert pd.api.types.is_datetime64_any_dtype(forecaster.df_ready['ds'])
-    assert metrics == ['sessions', 'conversions', 'spend']
+    def test_data_validation_renames_date_column(forecaster):
+        """The 'date' column is renamed to 'ds' and parsed as datetime."""
+        metrics = forecaster._data_validation(forecaster.df_beforepredict)
+        assert list(forecaster.df_ready.columns) == ['ds', 'sessions', 'conversions', 'spend']
+        assert pd.api.types.is_datetime64_any_dtype(forecaster.df_ready['ds'])
+        assert metrics == ['sessions', 'conversions', 'spend']
 
 
-def test_data_validation_accepts_spanish_date_column(df_metrics):
-    """A 'fecha' column works exactly like 'date'."""
-    fc = ProphetForecaster(df_metrics.rename(columns={'date': 'fecha'}), verbose=False)
-    fc._data_validation(fc.df_beforepredict)
-    assert 'ds' in fc.df_ready.columns
-    assert 'fecha' not in fc.df_ready.columns
-
-
-def test_data_validation_raises_without_date_column(df_metrics):
-    """A DataFrame without 'date'/'fecha' is rejected."""
-    fc = ProphetForecaster(df_metrics.rename(columns={'date': 'dia'}), verbose=False)
-    with pytest.raises(ValueError, match="No date columns found"):
+    def test_data_validation_accepts_spanish_date_column(df_metrics):
+        """A 'fecha' column works exactly like 'date'."""
+        fc = ProphetForecaster(df_metrics.rename(columns={'date': 'fecha'}), verbose=False)
         fc._data_validation(fc.df_beforepredict)
+        assert 'ds' in fc.df_ready.columns
+        assert 'fecha' not in fc.df_ready.columns
 
 
-def test_data_validation_raises_on_non_numeric_metric(df_metrics):
-    """String dimensions are rejected before hitting Prophet."""
-    df = df_metrics.assign(keyword='zapatillas')
-    fc = ProphetForecaster(df, verbose=False)
-    with pytest.raises(TypeError, match="INTEGRITY ERROR"):
-        fc._data_validation(fc.df_beforepredict)
+    def test_data_validation_raises_without_date_column(df_metrics):
+        """A DataFrame without 'date'/'fecha' is rejected."""
+        fc = ProphetForecaster(df_metrics.rename(columns={'date': 'dia'}), verbose=False)
+        with pytest.raises(ValueError, match="No date columns found"):
+            fc._data_validation(fc.df_beforepredict)
 
 
-def test_data_validation_raises_on_unknown_metric(forecaster):
-    """Asking for a metric that is not in the DataFrame fails fast."""
-    with pytest.raises(ValueError, match="Metric columns not found"):
-        forecaster._data_validation(forecaster.df_beforepredict, metrics=['ghost'])
+    def test_data_validation_raises_on_non_numeric_metric(df_metrics):
+        """String dimensions are rejected before hitting Prophet."""
+        df = df_metrics.assign(keyword='zapatillas')
+        fc = ProphetForecaster(df, verbose=False)
+        with pytest.raises(TypeError, match="INTEGRITY ERROR"):
+            fc._data_validation(fc.df_beforepredict)
 
 
-def test_data_validation_raises_on_unknown_regressor(forecaster):
-    """Asking for a regressor that is not in the DataFrame fails fast."""
-    with pytest.raises(ValueError, match="Regressor columns not found"):
+    def test_data_validation_raises_on_unknown_metric(forecaster):
+        """Asking for a metric that is not in the DataFrame fails fast."""
+        with pytest.raises(ValueError, match="Metric columns not found"):
+            forecaster._data_validation(forecaster.df_beforepredict, metrics=['ghost'])
+
+
+    def test_data_validation_raises_on_unknown_regressor(forecaster):
+        """Asking for a regressor that is not in the DataFrame fails fast."""
+            with pytest.raises(ValueError, match="Regressor columns not found"):
         forecaster._data_validation(forecaster.df_beforepredict, regressors=['ghost'])
 
 

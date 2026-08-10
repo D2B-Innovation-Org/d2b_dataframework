@@ -27,9 +27,11 @@ jobs:
         run: |
           pip install -e ".[dev]"
 
+      # --cov-fail-under bloquea el PR si la cobertura baja del umbral.
+      # Súbelo a medida que cubras más módulos; nunca lo bajes para "arreglar" un CI rojo.
       - name: Run tests
         run: |
-          pytest --cov=d2b_data --cov-report=term-missing -v
+          pytest --cov=d2b_data --cov-report=term-missing --cov-fail-under=75 -v
 
   # Verifica que el paquete se pueda construir e instalar de verdad.
   # `pip install -e .` esconde errores de empaquetado (archivos que no
