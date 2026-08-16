@@ -9,10 +9,8 @@ import pandas as pd
 import json
 import requests
 import time
-from datetime import UTC, datetime, timezone, timedelta
+from datetime import UTC, datetime
 
-from os.path import isfile
-from requests.structures import CaseInsensitiveDict
 from urllib.parse import quote
 from typing import Optional
 import logging
@@ -98,7 +96,13 @@ class LinkedinMarketing:
         return _StdlibAdapter()
 
     def _load_token_from_file(self) -> Optional[dict]:
-        """Read token JSON from disk and set self.token."""
+        """Read token JSON from disk and set self.token.
+
+        Any previously loaded credential is discarded first, so a failed
+        read never leaves the client authenticated with a stale token.
+        """
+        self.token = None
+
         try:
             with open(self.token_path, "r") as fh:
                 data = json.load(fh)
@@ -116,6 +120,7 @@ class LinkedinMarketing:
     def _set_headers(self) -> None:
         """Build the headers dict required by the LinkedIn REST API."""
         if not self.token:
+            self.headers = None
             self.logger.critical("Cannot set headers: access token is missing.")
             return
 
@@ -149,6 +154,9 @@ class LinkedinMarketing:
         """
         if not self.headers:
             raise RuntimeError("Headers not set. Authenticate first.")
+
+        if max_retries < 0:
+            raise ValueError("max_retries must be zero or greater")
 
         transient_codes = {500, 502, 503}
 
@@ -209,10 +217,10 @@ class LinkedinMarketing:
             collected.extend(elements)
 
             self.logger.info(
-                f"Processing batch of {len(elements)} posts (offset {start_index})..."
+                f"Processing batch of {len(elements)} rows (offset {start_index})..."
             )
 
-            if page_size > len(elements):
+            if len(elements) < page_size:
                 self.logger.info("No more pages available.")
                 break
 
@@ -249,7 +257,7 @@ class LinkedinMarketing:
             Report rows returned by the LinkedIn API.
 
         Raises:
-            ValueError: If pivot is not provided.
+            ValueError: If pivot is not provided or the dates are malformed.
             requests.exceptions.RequestException: If the API request fails.
         """
         if not pivot:
@@ -257,20 +265,35 @@ class LinkedinMarketing:
 
         urn_encoded = quote(f"urn:li:sponsoredAccount:{account_id}")
         accounts = f"List({urn_encoded})"
-        start_parts = start.split("-")
-        end_parts = end.split("-")
 
-        start_year, start_month, start_day = start_parts
-        end_year, end_month, end_day = end_parts
+        try:
+            start_date = datetime.strptime(start, "%Y-%m-%d")
+            end_date = datetime.strptime(end, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(
+                f"start and end must be YYYY-MM-DD dates (got {start!r}, {end!r})"
+            ) from exc
+
+        if start_date > end_date:
+            raise ValueError(f"start ({start}) must not be after end ({end})")
 
         date_range = (
-            f"(start:(year:{start_year},month:{int(start_month)},day:{int(start_day)}),"
-            f"end:(year:{end_year},month:{int(end_month)},day:{int(end_day)}))"
+            f"(start:(year:{start_date.year},month:{start_date.month},"
+            f"day:{start_date.day}),"
+            f"end:(year:{end_date.year},month:{end_date.month},"
+            f"day:{end_date.day}))"
         )
 
         pivot_values = ",".join(val.strip() for val in pivot.split(","))
 
-        fields = f"{metrics},pivotValues"
+        # The prepared URL is sent verbatim (see _request_get), so any stray
+        # whitespace would end up in the request line. dateRange is required
+        # for the caller to tell which day each row belongs to.
+        requested = [val.strip() for val in metrics.split(",") if val.strip()]
+        for required in ("dateRange", "pivotValues"):
+            if required not in requested:
+                requested.append(required)
+        fields = ",".join(requested)
 
         url = (
             f"https://api.linkedin.com/rest/adAnalytics"
@@ -286,14 +309,20 @@ class LinkedinMarketing:
 
         try:
             data = self._fetch_paginated_report(url)
-            self.logger.info(f"Data extraction successfull")
+            self.logger.info(f"Data extraction successfull: {len(data)} rows")
             return data
         except requests.exceptions.RequestException as exc:
-            self.logger.critical(f"LinkedIn API Error{exc}")
+            self.logger.critical(f"LinkedIn API Error: {exc}")
             raise
 
     def get_report_dataframe(
-        self, account_id, start, end, metrics, pivot=None, time_granularity="DAILY"
+        self,
+        account_id: str,
+        start: str,
+        end: str,
+        metrics: str,
+        pivot: Optional[str] = None,
+        time_granularity: str = "DAILY",
     ) -> pd.DataFrame:
         """Gets data from get_report and transforms to pd.DataFrame."""
 
@@ -305,7 +334,6 @@ class LinkedinMarketing:
             pivot,
             time_granularity,
         )
-        self.logger.info(f"Data extraction successfull")
         return pd.json_normalize(raw_data, sep="_")
 
     def get_campaign_names(self, campaign_ids):

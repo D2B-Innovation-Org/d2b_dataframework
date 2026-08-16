@@ -48,7 +48,8 @@ pytest
 | ☁️ **BigQuery** | `Google_Bigquery` | Streamline SQL queries and data uploads. |
 | 📝 **Sheets** | `Google_Spreadsheet` | Read/Write operations on Google Sheets. |
 | 🔑 **Auth** | `Google_Token_MNG` | Manage OAuth2 tokens and credentials. |
-| 💼 **LinkedIn** | `Linkedin_Marketing` | Extract B2B marketing performance metrics. |
+| 💼 **LinkedIn Ads** | `LinkedinMarketing` | Extract B2B marketing performance metrics from the Ads Reporting API. |
+| 💼 **LinkedIn Organic** | `LinkedinOrganic` | Page posts, follower stats and engagement via Community Management API. |
 | 🎵 **TikTok** | `TikTokMarketing` | Integration with TikTok Ads API. |
 | 🐦 **X (Twitter)** | `X_ads` | Handle X Ads data reporting. |
 | 🔮 **Forecasting** | `ProphetForecaster` | Time-series forecasting with Meta Prophet (optional: `pip install prophet`). |
@@ -72,7 +73,7 @@ print(df.head())
 ### Facebook Organic (Page Insights)
 
 ```python
-from d2b_data.FacebookOrganic import FacebookOrganic
+from d2b_data.facebook_organic import FacebookOrganic
 
 client = FacebookOrganic(
     page_id="YOUR_PAGE_ID",
@@ -91,7 +92,7 @@ Requires a Page Access Token with `pages_read_engagement` and `read_insights` pe
 Basic usage — one line, no configuration. Every numeric column is forecasted:
 
 ```python
-from d2b_data.ProphetForecaster import ProphetForecaster
+from d2b_data.prophet_forecaster import ProphetForecaster
 
 # df: a 'date' (or 'fecha') column + numeric metric columns
 fc = ProphetForecaster(df)

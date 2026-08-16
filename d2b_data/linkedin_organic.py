@@ -188,7 +188,7 @@ class LinkedinOrganic:
             Full API response dict, or None on failure.
         """
         url = "https://api.linkedin.com/rest/organizationAcls?q=roleAssignee"
-
+        if role:
             url += f"&role={role}"
 
         self.verbose.log("GET managed organizations...")
