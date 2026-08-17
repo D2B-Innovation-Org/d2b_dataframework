@@ -82,7 +82,7 @@ def df_metrics():
 @pytest.fixture
 def forecaster(df_metrics):
     """Silent ProphetForecaster over the sample DataFrame."""
-    from d2b_data.ProphetForecaster import ProphetForecaster
+    from d2b_data.prophet_forecaster import ProphetForecaster
 
     return ProphetForecaster(df_metrics, verbose=False)
 
