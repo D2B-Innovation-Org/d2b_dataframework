@@ -83,8 +83,7 @@ class LinkedinMarketing:
         """
 
         logger = logging.getLogger("LinkedinMarketing")
-        if not logger.handlers:
-            logging.basicConfig(level=logging.INFO)
+        logger.setLevel(logging.INFO)
 
         class _StdlibAdapter:
             def info(self, message: str) -> None:
