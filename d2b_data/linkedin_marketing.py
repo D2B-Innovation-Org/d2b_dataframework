@@ -452,6 +452,10 @@ class LinkedinMarketing:
                 time_granularity,
             )
 
+            if not raw_data:
+                self.logger.info(f"No data retrieved for account: {account_id}")
+                return pd.DataFrame()
+
             self.logger.debug("Getting campaign name information")
 
             campaign_names_ids = set()
@@ -531,4 +535,5 @@ class LinkedinMarketing:
             pivot,
             time_granularity,
         )
+
         return pd.json_normalize(raw_data, sep="_")
