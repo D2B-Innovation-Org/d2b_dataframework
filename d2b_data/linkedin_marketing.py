@@ -187,6 +187,29 @@ class LinkedinMarketing:
             response.raise_for_status()
             return response.json()
 
+    def _fetch_report(self, url: str) -> list[dict]:
+        """Fetch simple not-paginated response for a LinkedIn analytics report.
+
+        Args:
+            url: Fully formed LinkedIn Analytics API URL.
+
+        Returns:
+            Report rows collected across all fetched pages.
+        """
+        page_url = f"{url}&count={page_size}&start={start_index}"
+
+        try:
+            data = self._request_get(page_url)
+
+        except requests.exceptions.RequestException as exc:
+            self.logger.critical(f"LinkedIn API Error during pagination: {exc}")
+            raise
+
+        elements = data.get("elements")
+        self.logger.info(f"Retrieved {len(elements)} rows.")
+
+    return elements
+
     def _fetch_paginated_report(self, url: str) -> list[dict]:
         """Fetch all available pages for a LinkedIn analytics report.
 
@@ -384,7 +407,7 @@ class LinkedinMarketing:
         self.logger.info(f"GET analytics report for account: {account_id}")
 
         try:
-            data = self._fetch_paginated_report(url)
+            data = self._fetch_report(url)
             self.logger.info(f"Data extraction successfull: {len(data)} rows")
 
         except requests.exceptions.RequestException as exc:
