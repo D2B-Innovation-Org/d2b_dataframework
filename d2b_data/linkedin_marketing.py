@@ -70,9 +70,7 @@ class LinkedinMarketing:
             else:
                 self.logger.info(f"No token found in {self.token_path}.")
         else:
-            self.logger.info(
-                "Token file not specified. set__token to save a new token."
-            )
+            self.logger.info("Token file not specified. set_token() to load a token.")
 
     @staticmethod
     def _build_default_logger() -> object:
@@ -91,6 +89,9 @@ class LinkedinMarketing:
 
             def critical(self, message: str) -> None:
                 logger.error(message)
+
+            def debug(self, message: str) -> None:
+                logger.debug(message)
 
         return _StdlibAdapter()
 
@@ -227,8 +228,80 @@ class LinkedinMarketing:
 
         return collected
 
+    def _get_campaign_names(
+        self, campaign_ids: set[str], account_id: str
+    ) -> dict[str, str]:
+        """Extracts campaign names for a campaign name id list.
+
+        Args:
+            campaign_ids: A list of campaign ids extracted with get_report.
+            account_id: A string containing the account id for the queried account.
+
+        Return
+        """
+        if not campaign_ids:
+            self.logger.info("No campaign id's provided. returning empty dict")
+            return {}
+
+        campaign_ids_str = ",".join(campaign_ids)
+        url = f"https://api.linkedin.com/rest/adAccounts/{account_id}/adCampaigns?ids=List({campaign_ids_str})"
+
+        res = self._request_get(url)
+        self.logger.debug("Campaign name information retrieved")
+
+        results = res.get("results", {})
+        if not results:
+            self.logger("No campaign information returned.")
+            return {}
+
+        self.logger.debug(f"This is raw results: {results}")
+
+        campaign_name_map = {}
+
+        for key, value in results.items():
+            campaign_name_map[key] = value["name"]
+
+        return campaign_name_map
+
+    def _get_campaign_group_names(
+        self, campaign_group_ids: set[str], account_id: str
+    ) -> dict[str, str]:
+        """Extracts campaign group names for a campaign group id list
+
+        Args:
+           campaign_group_ids: a list containing the campaign group ids to be mapped.
+           account_id: A string containing the account id for the queried account.
+
+        Return:
+            A dictionary containing the ids mapped to campaign group names.
+        """
+        if not campaign_group_ids:
+            self.logger.info("No campaign id's provided. returning empty dict")
+            return {}
+
+        campaign_group_str = ",".join(campaign_group_ids)
+        url = f"https://api.linkedin.com/rest/adAccounts/{account_id}/adCampaignGroups?ids=List({campaign_group_str})"
+
+        res = self._request_get(url)
+        self.logger.debug("Campaign name information retrieved")
+
+        results = res.get("results", {})
+        if not results:
+            self.logger("No campaign information returned.")
+            return {}
+
+        self.logger.debug(f"This is raw results: {results}")
+
+        campaign_group_name_map = {}
+
+        for key, value in results.items():
+            campaign_group_name_map[key] = value["name"]
+
+        return campaign_group_name_map
+
     def set_token(self, token_path: str) -> None:
-        """Calls private method _load_token_from_file"""
+        """Load an access token from a file and update the request headers."""
+
         self.token_path = token_path
         self._load_token_from_file()
         self._set_headers()
@@ -238,8 +311,8 @@ class LinkedinMarketing:
         account_id: str,
         start: str,
         end: str,
-        metrics: str,
-        pivot: Optional[str] = None,
+        metrics: list[str],
+        pivot: list[str] = None,
         time_granularity: str = "DAILY",
     ) -> list[dict]:
         """Fetch an analytics report from the LinkedIn Marketing API.
@@ -248,7 +321,7 @@ class LinkedinMarketing:
             account_id: LinkedIn sponsored account ID.
             start: Start date in YYYY-MM-DD format.
             end: End date in YYYY-MM-DD format.
-            metrics: Comma-separated metrics to include in the report.
+            metrics: Metrics to include in the report.
             pivot: Dimension used to group the report.
             time_granularity: Time granularity for the report.
 
@@ -261,6 +334,18 @@ class LinkedinMarketing:
         """
         if not pivot:
             raise ValueError("pivot is required for statistics reports")
+
+        if len(pivot) > 3:
+            raise ValueError("Only 3 pivot values can be passed for each query")
+
+        if len(metrics) > 20:
+            raise ValueError("Only 20 metrics can be passed for each query")
+
+        metrics = metrics.copy()
+
+        for required in ("dateRange", "pivotValues"):
+            if required not in metrics:
+                metrics.append(required)
 
         urn_encoded = quote(f"urn:li:sponsoredAccount:{account_id}")
         accounts = f"List({urn_encoded})"
@@ -283,16 +368,8 @@ class LinkedinMarketing:
             f"day:{end_date.day}))"
         )
 
-        pivot_values = ",".join(val.strip() for val in pivot.split(","))
-
-        # The prepared URL is sent verbatim (see _request_get), so any stray
-        # whitespace would end up in the request line. dateRange is required
-        # for the caller to tell which day each row belongs to.
-        requested = [val.strip() for val in metrics.split(",") if val.strip()]
-        for required in ("dateRange", "pivotValues"):
-            if required not in requested:
-                requested.append(required)
-        fields = ",".join(requested)
+        pivot_values = ",".join(pivot)
+        fields = ",".join(metrics)
 
         url = (
             f"https://api.linkedin.com/rest/adAnalytics"
@@ -304,26 +381,127 @@ class LinkedinMarketing:
             f"&fields={fields}"
         )
 
-        self.logger.info(f"GET campaign information for org: {account_id}")
+        self.logger.info(f"GET analytics report for account: {account_id}")
 
         try:
             data = self._fetch_paginated_report(url)
             self.logger.info(f"Data extraction successfull: {len(data)} rows")
-            return data
+
         except requests.exceptions.RequestException as exc:
             self.logger.critical(f"LinkedIn API Error: {exc}")
             raise
+
+        return data
 
     def get_report_dataframe(
         self,
         account_id: str,
         start: str,
         end: str,
-        metrics: str,
-        pivot: Optional[str] = None,
+        metrics: list[str],
+        pivot: list[str],
         time_granularity: str = "DAILY",
+        get_campaign_information: bool = True,
     ) -> pd.DataFrame:
-        """Gets data from get_report and transforms to pd.DataFrame."""
+        """Fetch and transform a LinkedIn analytics report into a DataFrame.
+
+        Retrieves report data using get_report() and normalizes the response
+        into a pandas DataFrame. Optionally enriches campaign data with campaign
+        and campaign group IDs and names, and normalizes the report date.
+
+        Args:
+            account_id: LinkedIn sponsored account ID.
+            start: Start date in YYYY-MM-DD format.
+            end: End date in YYYY-MM-DD format.
+            metrics: Metrics to include in the report.
+            pivot: Dimensions used to group the report.
+            time_granularity: Time granularity for the report. Defaults to "DAILY".
+            get_campaign_information: Whether to enrich the report with campaign
+                and campaign group information. Defaults to True.
+
+        Returns:
+            A normalized and optionally enriched pandas DataFrame.
+        """
+        if get_campaign_information:
+            raw_data = self.get_report(
+                account_id,
+                start,
+                end,
+                metrics,
+                pivot,
+                time_granularity,
+            )
+
+            self.logger.debug("Getting campaign name information")
+
+            campaign_names_ids = set()
+            campaign_group_names_ids = set()
+
+            for row in raw_data:
+                pivot_values = row.get("pivotValues")
+
+                if pivot_values:
+                    campaign_name_id = pivot_values[1].split(":")[3]
+                    campaign_group_id = pivot_values[0].split(":")[3]
+
+                    campaign_names_ids.add(campaign_name_id)
+                    campaign_group_names_ids.add(campaign_group_id)
+
+            try:
+                campaign_name_map = self._get_campaign_names(
+                    campaign_names_ids, account_id
+                )
+                self.logger.debug(f"Campaign name maps: {campaign_name_map}")
+                campaign_group_name_map = self._get_campaign_group_names(
+                    campaign_group_names_ids, account_id
+                )
+                self.logger.debug(
+                    f"Campaign group name maps: {campaign_group_name_map}"
+                )
+
+                self.logger.debug("Campaign name and group information retrieved")
+            except Exception as e:
+                self.logger.critical(f"Error during campaign name extraction: {e}")
+                raise
+
+            df = pd.json_normalize(raw_data, sep="_")
+
+            self.logger.debug("Starting DataFrame transformation...")
+
+            df["campaign_group_id"] = df["pivotValues"].apply(
+                lambda x: x[0].split(":")[3]
+            )
+            df["campaign_id"] = df["pivotValues"].apply(lambda x: x[1].split(":")[3])
+
+            df["campaign_group_name"] = df["pivotValues"].apply(
+                lambda x: campaign_group_name_map.get(x[0].split(":")[3])
+            )
+
+            df["campaign_name"] = df["pivotValues"].apply(
+                lambda x: campaign_name_map.get(x[1].split(":")[3])
+            )
+
+            df["date"] = pd.to_datetime(
+                {
+                    "year": df["dateRange_start_year"],
+                    "month": df["dateRange_start_month"],
+                    "day": df["dateRange_start_day"],
+                }
+            )
+
+            columns_to_drop = [
+                "dateRange_start_year",
+                "dateRange_start_month",
+                "dateRange_start_day",
+                "dateRange_end_year",
+                "dateRange_end_month",
+                "dateRange_end_day",
+                "pivotValues",
+            ]
+
+            df = df.drop(columns=columns_to_drop)
+
+            return df
 
         raw_data = self.get_report(
             account_id,
@@ -334,11 +512,3 @@ class LinkedinMarketing:
             time_granularity,
         )
         return pd.json_normalize(raw_data, sep="_")
-
-    def get_campaign_names(self, campaign_ids):
-        """Dev Pending"""
-        pass
-
-    def get_campaign_group_names(self, group_ids):
-        """Dev Pending"""
-        pass
