@@ -207,8 +207,6 @@ class LinkedinMarketing:
 
         elements = data.get("elements")
         self.logger.info(f"Retrieved {len(elements)} rows.")
-                            start_date: "2026-01-01" 
-                            end_date: "2026-03-31"
         return elements
 
     def _fetch_paginated_report(self, url: str) -> list[dict]:
