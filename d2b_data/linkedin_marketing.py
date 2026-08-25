@@ -196,10 +196,8 @@ class LinkedinMarketing:
         Returns:
             Report rows collected across all fetched pages.
         """
-        page_url = f"{url}&count={page_size}&start={start_index}"
-
         try:
-            data = self._request_get(page_url)
+            data = self._request_get(url)
 
         except requests.exceptions.RequestException as exc:
             self.logger.critical(f"LinkedIn API Error during pagination: {exc}")
