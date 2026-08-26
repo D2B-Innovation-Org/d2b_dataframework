@@ -53,7 +53,7 @@ class LinkedinMarketing:
         self.logger = logger or self._build_default_logger()
         self.linkedin_version = "202607"
         self.logger.info(
-            f"--- EXECUTING: LinkedinMarketing v1.1, Linkedin-Version:{self.linkedin_version}"
+            f"--- EXECUTING: LinkedinMarketing v1.2, Linkedin-Version:{self.linkedin_version}"
             f"- Initialized at {datetime.now(UTC).isoformat()}---"
         )
         self.token_path: Optional[str] = token_path or None
