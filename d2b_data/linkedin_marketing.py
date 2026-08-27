@@ -525,7 +525,7 @@ class LinkedinMarketing:
             )
             df["campaign_id"] = df["pivotValues"].apply(lambda x: x[1].split(":")[3])
 
-            df["adset_name"] = df["pivotValues"].apply(
+            df["ad_set_name"] = df["pivotValues"].apply(
                 lambda x: campaign_group_name_map.get(x[0].split(":")[3])
             )
 
