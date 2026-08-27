@@ -187,6 +187,34 @@ class LinkedinMarketing:
             response.raise_for_status()
             return response.json()
 
+    def _validate_account_access(self, account_id: str) -> None:
+        """Validate access to a LinkedIn sponsored account.
+
+        Verifies that the authenticated user has permission to access the
+        specified LinkedIn Ads account before requesting analytics data.
+
+        Args:
+            account_id: LinkedIn sponsored account ID to validate.
+
+        Raises:
+            PermissionError: If the account does not exist or the authenticated
+                user does not have access to it.
+            requests.exceptions.RequestException: If the LinkedIn API request
+                fails for any other reason.
+        """
+        url = f"https://api.linkedin.com/rest/adAccounts/{account_id}"
+
+        try:
+            self._request_get(url)
+
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code in (403, 404):
+                raise PermissionError(
+                    f"This token has no access to LinkedIn Ads account: {account_id}"
+                ) from exc
+
+            raise
+
     def _fetch_report(self, url: str) -> list[dict]:
         """Fetch simple not-paginated response for a LinkedIn analytics report.
 
@@ -361,6 +389,7 @@ class LinkedinMarketing:
         if len(metrics) > 20:
             raise ValueError("Only 20 metrics can be passed for each query")
 
+        self._validate_account_access(account_id)
         metrics = metrics.copy()
 
         for required in ("dateRange", "pivotValues"):
