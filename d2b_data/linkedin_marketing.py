@@ -311,11 +311,12 @@ class LinkedinMarketing:
 
         return campaign_name_map
 
-    def _get_campaign_group_names(
+    def _get_adset_names(
         self, campaign_group_ids: set[str], account_id: str
     ) -> dict[str, str]:
         """Extracts campaign group names for a campaign group id list
 
+        * campaign_grup_names is adset_name
         Args:
            campaign_group_ids: a list containing the campaign group ids to be mapped.
            account_id: A string containing the account id for the queried account.
@@ -505,14 +506,12 @@ class LinkedinMarketing:
                     campaign_names_ids, account_id
                 )
                 self.logger.debug(f"Campaign name maps: {campaign_name_map}")
-                campaign_group_name_map = self._get_campaign_group_names(
+                campaign_group_name_map = self._get_adset_names(
                     campaign_group_names_ids, account_id
                 )
-                self.logger.debug(
-                    f"Campaign group name maps: {campaign_group_name_map}"
-                )
+                self.logger.debug(f"Adset names maps: {campaign_group_name_map}")
 
-                self.logger.debug("Campaign name and group information retrieved")
+                self.logger.debug("Campaign name and adset name information retrieved")
             except Exception as e:
                 self.logger.critical(f"Error during campaign name extraction: {e}")
                 raise
@@ -526,7 +525,7 @@ class LinkedinMarketing:
             )
             df["campaign_id"] = df["pivotValues"].apply(lambda x: x[1].split(":")[3])
 
-            df["campaign_group_name"] = df["pivotValues"].apply(
+            df["adset_name"] = df["pivotValues"].apply(
                 lambda x: campaign_group_name_map.get(x[0].split(":")[3])
             )
 
