@@ -125,7 +125,7 @@ class Facebook_Marketing:
 
         return df_facebook
 
-    def get_report(self, params, act_id, max_tries=10):
+    def get_report(self, params, act_id, max_tries=10, page_size=500):
         """
         Ejecuta una consulta de reportes asincrónica a la API de Facebook Ads para una cuenta específica.
 
@@ -141,6 +141,9 @@ class Facebook_Marketing:
                 - (opcional) 'breakdowns', 'time_increment', etc.
             act_id (str): ID de cuenta publicitaria en formato 'act_XXXXXXXXXXXX'.
             max_tries (int, optional): Número máximo de intentos para iniciar el job. Por defecto es 10.
+            page_size (int, optional): Filas por página al descargar el resultado del job. No cambia
+                los datos, solo cuántas llamadas se hacen: sin este valor Meta pagina de a 25 filas y
+                cada página cuenta contra el límite de Ads Insights de la app. Por defecto es 500.
 
         Returns:
             list[dict]: Lista de registros extraídos del reporte, cada uno representando una fila con datos exportados.
@@ -197,7 +200,7 @@ class Facebook_Marketing:
 
             if status == "Job Completed":
                 self.verbose.log("get_report | Job completado")
-                result = async_job.get_result()
+                result = async_job.get_result(params={"limit": page_size})
 
                 if result is None:
                     self.verbose.critical(
