@@ -89,7 +89,7 @@ def test_dedup_leads_does_not_mutate_the_input():
     """The original DataFrame keeps its string timestamps."""
     df = pd.DataFrame({"lead_id": [1], "updated_at": ["2024-01-01"]})
     Alodesk_API.dedup_leads(df)
-    assert df["updated_at"].dtype == object
+    assert df["updated_at"].tolist() == ["2024-01-01"]
 
 
 def test_dedup_leads_coerces_invalid_timestamps():

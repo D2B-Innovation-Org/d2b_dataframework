@@ -299,7 +299,7 @@ class LinkedinMarketing:
 
         results = res.get("results", {})
         if not results:
-            self.logger("No campaign information returned.")
+            self.logger.info("No campaign information returned.")
             return {}
 
         self.logger.debug(f"This is raw results: {results}")
@@ -336,7 +336,7 @@ class LinkedinMarketing:
 
         results = res.get("results", {})
         if not results:
-            self.logger("No campaign information returned.")
+            self.logger.info("No campaign information returned.")
             return {}
 
         self.logger.debug(f"This is raw results: {results}")
@@ -390,16 +390,6 @@ class LinkedinMarketing:
         if len(metrics) > 20:
             raise ValueError("Only 20 metrics can be passed for each query")
 
-        self._validate_account_access(account_id)
-        metrics = metrics.copy()
-
-        for required in ("dateRange", "pivotValues"):
-            if required not in metrics:
-                metrics.append(required)
-
-        urn_encoded = quote(f"urn:li:sponsoredAccount:{account_id}")
-        accounts = f"List({urn_encoded})"
-
         try:
             start_date = datetime.strptime(start, "%Y-%m-%d")
             end_date = datetime.strptime(end, "%Y-%m-%d")
@@ -410,6 +400,16 @@ class LinkedinMarketing:
 
         if start_date > end_date:
             raise ValueError(f"start ({start}) must not be after end ({end})")
+
+        self._validate_account_access(account_id)
+        metrics = metrics.copy()
+
+        for required in ("dateRange", "pivotValues"):
+            if required not in metrics:
+                metrics.append(required)
+
+        urn_encoded = quote(f"urn:li:sponsoredAccount:{account_id}")
+        accounts = f"List({urn_encoded})"
 
         date_range = (
             f"(start:(year:{start_date.year},month:{start_date.month},"

@@ -45,7 +45,7 @@ def load_schema_from_csv(verbose_logger_func, wf_name_func):
                 schema_df["description"] = ""
 
             schema_df["type"] = schema_df["type"].str.upper()
-            schema_df["description"] = schema_df["description"].astype(str).map(unidecode)
+            schema_df["description"] = schema_df["description"].fillna("").astype(str).map(unidecode)
 
             schema_table_local = json.loads(
                 schema_df[["name", "type", "description"]].to_json(orient="records", force_ascii=False)

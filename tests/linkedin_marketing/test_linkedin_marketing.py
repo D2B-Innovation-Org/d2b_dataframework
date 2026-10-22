@@ -173,9 +173,9 @@ def test_get_campaign_names_without_ids_returns_empty_dict(marketing):
     assert marketing._get_campaign_names(set(), "123") == {}
 
 
-def test_get_campaign_group_names_without_ids_returns_empty_dict(marketing):
+def test_get_adset_names_without_ids_returns_empty_dict(marketing):
     """An empty id set short-circuits before any API call."""
-    assert marketing._get_campaign_group_names(set(), "123") == {}
+    assert marketing._get_adset_names(set(), "123") == {}
 
 
 def test_campaign_helpers_log_the_empty_case(logger, token_file):
@@ -183,10 +183,20 @@ def test_campaign_helpers_log_the_empty_case(logger, token_file):
     li = LinkedinMarketing(token_path=token_file, logger=logger)
 
     li._get_campaign_names(set(), "123")
-    li._get_campaign_group_names(set(), "123")
+    li._get_adset_names(set(), "123")
 
     empty_logs = [msg for msg in logger.info_messages if "No campaign id" in msg]
     assert len(empty_logs) == 2
+
+
+@pytest.mark.parametrize("helper", ["_get_campaign_names", "_get_adset_names"])
+def test_campaign_helpers_handle_empty_api_results(logger, token_file, helper):
+    """An empty 'results' payload returns {} and logs it instead of crashing."""
+    li = LinkedinMarketing(token_path=token_file, logger=logger)
+    li._request_get = lambda url: {"results": {}}
+
+    assert getattr(li, helper)({"1"}, "123") == {}
+    assert any("No campaign information" in msg for msg in logger.info_messages)
 
 
 # ------------------------------------------------------------------
