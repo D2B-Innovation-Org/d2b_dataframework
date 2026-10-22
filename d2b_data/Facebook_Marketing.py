@@ -15,6 +15,7 @@ class Facebook_Marketing:
         id_account=None,
         unsampled=False,
         verbose_logger=None,
+        api_version="v25.0",
     ):
         self.app_id = app_id
         self.app_secret = app_secret
@@ -26,7 +27,10 @@ class Facebook_Marketing:
             "--- EXECUTING Facebook_Marketing Class v3.3 - Deployed on 2025-06-25 15:30 ---"
         )
         self.service = FacebookAdsApi.init(
-            self.app_id, self.app_secret, self.access_token
+            self.app_id,
+            self.app_secret,
+            self.access_token,
+            api_version=api_version,
         )
 
     def _null_verbose(self):
@@ -146,7 +150,7 @@ class Facebook_Marketing:
             Exception: Si la API lanza un error crítico (subcode 99 o status 500), si el job falla,
                     o si se agota el tiempo de espera sin recibir resultados.
         """
-        my_account = AdAccount(act_id)
+        my_account = AdAccount(act_id, api=self.service)
         for attempt in range(max_tries):
             try:
                 async_job = my_account.get_insights(params=params, is_async=True)
