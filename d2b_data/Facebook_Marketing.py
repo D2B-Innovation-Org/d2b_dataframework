@@ -1,4 +1,5 @@
 import time
+from urllib.parse import urlsplit
 
 import pandas as pd
 from facebook_business.adobjects.adaccount import AdAccount
@@ -32,6 +33,39 @@ class Facebook_Marketing:
             self.access_token,
             api_version=api_version,
         )
+        self.service._session.requests.hooks["response"].append(self._log_meta_usage)
+
+    def _log_meta_usage(self, response, *args, **kwargs):
+        """
+        Registra el uso de cuota que Meta informa en las cabeceras de cada respuesta.
+
+        Se engancha como hook de `requests` en la sesión del SDK, así cubre todas las
+        llamadas (lanzar el job, consultar su estado y cada página del resultado).
+        Solo se registra la ruta, nunca el query string, porque ahí viajan el token y
+        el appsecret_proof.
+        """
+        try:
+            headers = response.headers
+            usage = {
+                name: headers[header]
+                for name, header in (
+                    ("insights_throttle", "x-fb-ads-insights-throttle"),
+                    ("business_use_case", "x-business-use-case-usage"),
+                    ("app_usage", "x-app-usage"),
+                )
+                if header in headers
+            }
+            if not usage:
+                return
+            path = urlsplit(response.url).path
+            caller = getattr(self.verbose, "workflow_name", None) or "unknown"
+            details = " | ".join(f"{name}={value}" for name, value in usage.items())
+            self.verbose.log(
+                f"meta_usage | {caller} | {response.request.method} {path} | "
+                f"status={response.status_code} | {details}"
+            )
+        except Exception:
+            pass
 
     def _null_verbose(self):
         class DummyVerbose:

@@ -291,6 +291,71 @@ def test_get_report_raises_on_critical_facebook_error(fb, mocker):
 
 
 # ---------------------------------------------------------------------------
+# _log_meta_usage
+# ---------------------------------------------------------------------------
+
+
+def _meta_response(headers):
+    import requests
+
+    response = requests.Response()
+    response.status_code = 200
+    response.url = (
+        "https://graph.facebook.com/v25.0/act_123/insights"
+        "?access_token=SECRET_TOKEN&appsecret_proof=SECRET_PROOF"
+    )
+    response.headers.update(headers)
+    response.request = requests.Request("POST", response.url).prepare()
+    return response
+
+
+def test_init_registers_usage_hook(mocker):
+    """The usage logger is attached to the SDK's requests session."""
+    api = MagicMock()
+    api._session.requests.hooks = {"response": []}
+    mocker.patch("facebook_business.api.FacebookAdsApi.init", return_value=api)
+    from d2b_data.Facebook_Marketing import Facebook_Marketing
+
+    fb = Facebook_Marketing("app", "secret", "token")
+
+    assert api._session.requests.hooks["response"] == [fb._log_meta_usage]
+
+
+def test_log_meta_usage_logs_headers_without_query_string(fb):
+    """Usage headers are logged with the path only, never the token in the query."""
+    fb.verbose = MagicMock(workflow_name="el-facebook | D2B-axonpharma")
+    throttle = '{"app_id_util_pct":87.5,"acc_id_util_pct":3,"ads_api_access_tier":"standard_access"}'
+    response = _meta_response(
+        {
+            "X-FB-Ads-Insights-Throttle": throttle,
+            "X-Business-Use-Case-Usage": '{"111":[{"call_count":4}]}',
+        }
+    )
+
+    fb._log_meta_usage(response)
+
+    msg = fb.verbose.log.call_args.args[0]
+    assert "el-facebook | D2B-axonpharma" in msg
+    assert "POST /v25.0/act_123/insights" in msg
+    assert f"insights_throttle={throttle}" in msg
+    assert 'business_use_case={"111":[{"call_count":4}]}' in msg
+    assert "SECRET" not in msg
+
+
+def test_log_meta_usage_skips_responses_without_usage_headers(fb):
+    fb.verbose = MagicMock()
+    fb._log_meta_usage(_meta_response({"Content-Type": "application/json"}))
+    fb.verbose.log.assert_not_called()
+
+
+def test_log_meta_usage_never_raises(fb):
+    """A broken response must not break the Meta call that triggered the hook."""
+    fb.verbose = MagicMock()
+    fb._log_meta_usage(object())
+    fb.verbose.log.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _split_text
 # ---------------------------------------------------------------------------
 
