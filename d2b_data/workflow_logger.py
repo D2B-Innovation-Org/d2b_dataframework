@@ -1,7 +1,33 @@
 import logging
-from typing import Optional
+import warnings
+from typing import Any, Optional
 
 import requests
+
+
+def resolve_logger(logger: Any, verbose_logger: Any, owner: str) -> Any:
+    """Elige el logger entre el parámetro nuevo y el alias obsoleto.
+
+    Las clases de d2b_data recibían el logger como `verbose_logger`; ahora el
+    parámetro se llama `logger`. Mientras haya funciones que usen el nombre
+    antiguo se acepta, pero se avisa con un DeprecationWarning.
+
+    Args:
+        logger: Valor del parámetro `logger`.
+        verbose_logger: Valor del parámetro obsoleto `verbose_logger`.
+        owner: Nombre de la clase o función, para el mensaje del aviso.
+
+    Returns:
+        `logger` si viene; si no, `verbose_logger`; None si no viene ninguno.
+    """
+    if verbose_logger is None:
+        return logger
+    warnings.warn(
+        f"{owner}: el parámetro 'verbose_logger' está obsoleto, usa 'logger'",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+    return logger if logger is not None else verbose_logger
 
 
 class WorkflowLogger:

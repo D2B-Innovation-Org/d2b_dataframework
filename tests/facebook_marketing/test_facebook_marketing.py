@@ -339,9 +339,38 @@ def test_init_registers_usage_hook(mocker):
     assert api._session.requests.hooks["response"] == [fb._log_meta_usage]
 
 
+def test_deprecated_verbose_logger_keyword_still_works(mocker):
+    """Functions still passing verbose_logger= keep working during the migration."""
+    api = MagicMock()
+    api._session.requests.hooks = {"response": []}
+    mocker.patch("facebook_business.api.FacebookAdsApi.init", return_value=api)
+    from d2b_data.Facebook_Marketing import Facebook_Marketing
+
+    old_logger = MagicMock()
+    with pytest.warns(DeprecationWarning, match="Facebook_Marketing"):
+        fb = Facebook_Marketing("app", "secret", "token", verbose_logger=old_logger)
+
+    assert fb.logger is old_logger
+    old_logger.log.assert_called()
+
+
+def test_positional_arguments_keep_their_order(mocker):
+    """logger stays in the slot verbose_logger had, so api_version is still 8th."""
+    api = MagicMock()
+    api._session.requests.hooks = {"response": []}
+    init = mocker.patch("facebook_business.api.FacebookAdsApi.init", return_value=api)
+    from d2b_data.Facebook_Marketing import Facebook_Marketing
+
+    custom = MagicMock()
+    fb = Facebook_Marketing("app", "secret", "token", "123", False, custom, "v99.0")
+
+    assert fb.logger is custom
+    assert init.call_args.kwargs["api_version"] == "v99.0"
+
+
 def test_log_meta_usage_logs_headers_without_query_string(fb):
     """Usage headers are logged with the path only, never the token in the query."""
-    fb.verbose = MagicMock(workflow_name="el-facebook | D2B-axonpharma")
+    fb.logger = MagicMock(workflow_name="el-facebook | D2B-axonpharma")
     throttle = '{"app_id_util_pct":87.5,"acc_id_util_pct":3,"ads_api_access_tier":"standard_access"}'
     response = _meta_response(
         {
@@ -352,7 +381,7 @@ def test_log_meta_usage_logs_headers_without_query_string(fb):
 
     fb._log_meta_usage(response)
 
-    msg = fb.verbose.log.call_args.args[0]
+    msg = fb.logger.log.call_args.args[0]
     assert "el-facebook | D2B-axonpharma" in msg
     assert "POST /v25.0/act_123/insights" in msg
     assert f"insights_throttle={throttle}" in msg
@@ -361,16 +390,16 @@ def test_log_meta_usage_logs_headers_without_query_string(fb):
 
 
 def test_log_meta_usage_skips_responses_without_usage_headers(fb):
-    fb.verbose = MagicMock()
+    fb.logger = MagicMock()
     fb._log_meta_usage(_meta_response({"Content-Type": "application/json"}))
-    fb.verbose.log.assert_not_called()
+    fb.logger.log.assert_not_called()
 
 
 def test_log_meta_usage_never_raises(fb):
     """A broken response must not break the Meta call that triggered the hook."""
-    fb.verbose = MagicMock()
+    fb.logger = MagicMock()
     fb._log_meta_usage(object())
-    fb.verbose.log.assert_not_called()
+    fb.logger.log.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

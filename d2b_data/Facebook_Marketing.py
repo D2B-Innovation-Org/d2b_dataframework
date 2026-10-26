@@ -5,6 +5,7 @@ import pandas as pd
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.api import FacebookAdsApi
 from facebook_business.exceptions import FacebookRequestError
+from d2b_data.workflow_logger import resolve_logger
 
 
 class Facebook_Marketing:
@@ -15,16 +16,19 @@ class Facebook_Marketing:
         access_token,
         id_account=None,
         unsampled=False,
-        verbose_logger=None,
+        logger=None,
         api_version="v25.0",
+        *,
+        verbose_logger=None,
     ):
+        logger = resolve_logger(logger, verbose_logger, "Facebook_Marketing")
         self.app_id = app_id
         self.app_secret = app_secret
         self.access_token = access_token
         self.unsampled = unsampled
         self.id_account = id_account
-        self.verbose = verbose_logger if verbose_logger else self._null_verbose()
-        self.verbose.log(
+        self.logger = logger if logger else self._null_verbose()
+        self.logger.log(
             "--- EXECUTING Facebook_Marketing Class v3.3 - Deployed on 2025-06-25 15:30 ---"
         )
         self.service = FacebookAdsApi.init(
@@ -58,9 +62,9 @@ class Facebook_Marketing:
             if not usage:
                 return
             path = urlsplit(response.url).path
-            caller = getattr(self.verbose, "workflow_name", None) or "unknown"
+            caller = getattr(self.logger, "workflow_name", None) or "unknown"
             details = " | ".join(f"{name}={value}" for name, value in usage.items())
-            self.verbose.log(
+            self.logger.log(
                 f"meta_usage | {caller} | {response.request.method} {path} | "
                 f"status={response.status_code} | {details}"
             )
@@ -86,7 +90,7 @@ class Facebook_Marketing:
         act_id = f"act_{str(id_account)}"
 
         if self.unsampled:
-            self.verbose.log("get_report_dataframe | Unsampled")
+            self.logger.log("get_report_dataframe | Unsampled")
             unsampled_array = []
             date_range = pd.date_range(
                 start=params["time_range"]["since"], end=params["time_range"]["until"]
@@ -103,7 +107,7 @@ class Facebook_Marketing:
             if not isinstance(report, list) or not all(
                 isinstance(r, dict) for r in report
             ):
-                self.verbose.critical(
+                self.logger.critical(
                     f"[{act_id}] Facebook devolvió un objeto inválido: {type(report)} - contenido: {report}"
                 )
                 raise ValueError("Bad data to set object data")
@@ -117,27 +121,27 @@ class Facebook_Marketing:
                 df_facebook = pd.DataFrame(columns=default_cols)
             else:
                 try:
-                    self.verbose.log(
+                    self.logger.log(
                         "Intentando crear el DataFrame desde el reporte crudo..."
                     )
                     df_facebook = pd.DataFrame(report, index=None)
-                    self.verbose.log("DataFrame creado exitosamente desde el reporte.")
+                    self.logger.log("DataFrame creado exitosamente desde el reporte.")
                 except Exception:
-                    self.verbose.critical(
+                    self.logger.critical(
                         "¡FALLO CRÍTICO EN LA CREACIÓN DEL DATAFRAME! Guardando datos crudos en GCS para análisis."
                     )
 
         if not df_facebook.empty:
             df_facebook.reset_index(drop=True, inplace=True)
 
-        self.verbose.log("Iniciando procesamiento de acciones (versión robusta)...")
+        self.logger.log("Iniciando procesamiento de acciones (versión robusta)...")
         actions_dict = self._unique_actions(df_facebook)
 
         for column, actions in actions_dict.items():
             for action in actions:
                 # Validamos que 'action' sea un string válido y no vacío.
                 if not isinstance(action, str) or not action:
-                    self.verbose.log(
+                    self.logger.log(
                         f"ADVERTENCIA: Se encontró una 'action_type' inválida o vacía: '{action}'. Se saltará."
                     )
                     continue
@@ -147,7 +151,7 @@ class Facebook_Marketing:
                 # --- LA SOLUCIÓN FINAL ---
                 # Verificamos si la columna ya existe en el DataFrame antes de intentar crearla.
                 if action_col_name in df_facebook.columns:
-                    self.verbose.log(
+                    self.logger.log(
                         f"ADVERTENCIA: La columna '{action_col_name}' ya existe. Saltando para evitar duplicados."
                     )
                     continue
@@ -155,7 +159,7 @@ class Facebook_Marketing:
                     lambda x: self._split_text(x, action)
                 )
 
-        self.verbose.log("Procesamiento de acciones completado.")
+        self.logger.log("Procesamiento de acciones completado.")
 
         return df_facebook
 
@@ -191,7 +195,7 @@ class Facebook_Marketing:
         for attempt in range(max_tries):
             try:
                 async_job = my_account.get_insights(params=params, is_async=True)
-                self.verbose.log(
+                self.logger.log(
                     f"get_report | Intento {attempt + 1} - Job lanzado correctamente para la cuenta {act_id}"
                 )
                 break
@@ -210,15 +214,15 @@ class Facebook_Marketing:
                 )
 
                 if subcode == 99 or status == 500:
-                    self.verbose.critical("Error crítico en Meta API:\n" + log_msg)
+                    self.logger.critical("Error crítico en Meta API:\n" + log_msg)
                     raise Exception(
                         "Meta API devolvió error 500 con subcode 99: problema de autenticación o permisos."
                     )
                 else:
-                    self.verbose.critical(log_msg)
+                    self.logger.critical(log_msg)
                     raise e
             except Exception as e:
-                self.verbose.critical(
+                self.logger.critical(
                     f"get_report | Error inesperado al iniciar job para {act_id}: {e}"
                 )
                 time.sleep(2**attempt)
@@ -233,19 +237,19 @@ class Facebook_Marketing:
             status = async_job.api_get().get("async_status", "")
 
             if status == "Job Completed":
-                self.verbose.log("get_report | Job completado")
+                self.logger.log("get_report | Job completado")
                 result = async_job.get_result(params={"limit": page_size})
 
                 if result is None:
-                    self.verbose.critical(
+                    self.logger.critical(
                         f"{act_id} | get_report | Resultado vacío o None recibido."
                     )
                     return []
 
-                self.verbose.log(
+                self.logger.log(
                     f"{act_id} | get_report | Resultado recibido con {len(result)} registros"
                 )
-                self.verbose.log(
+                self.logger.log(
                     f"get_report | Resultado crudo recibido, tipo: {type(result)}"
                 )
 
@@ -254,12 +258,12 @@ class Facebook_Marketing:
                     try:
                         records.append(record.export_all_data())
                     except Exception as e:
-                        self.verbose.log(
+                        self.logger.log(
                             f"get_report | Error procesando un registro: {str(e)}"
                         )
                         continue
 
-                self.verbose.log(
+                self.logger.log(
                     f"get_report | Exportación completada con {len(records)} registros."
                 )
                 return records
@@ -268,24 +272,24 @@ class Facebook_Marketing:
                 raise Exception(f"get_report | Job falló para la cuenta {act_id}")
 
             else:
-                self.verbose.log(f"get_report | Esperando... intento {tries + 1}")
+                self.logger.log(f"get_report | Esperando... intento {tries + 1}")
                 time.sleep(20)
                 tries += 1
 
         raise TimeoutError(f"get_report | Timeout esperando el job para {act_id}")
 
     def def_report_array_accounts(self, params, id_accounts):
-        self.verbose.log("def_report_array_accounts | Procesando múltiples cuentas")
+        self.logger.log("def_report_array_accounts | Procesando múltiples cuentas")
         array_df = []
         for acc in id_accounts:
-            self.verbose.log(f"Cuenta: {acc}")
+            self.logger.log(f"Cuenta: {acc}")
             acc = str(acc)
             df = self.get_report_dataframe(params, acc)
             array_df.append(df)
         return pd.concat(array_df, ignore_index=True)
 
     def _unique_actions(self, df):
-        self.verbose.log("_unique_actions")
+        self.logger.log("_unique_actions")
         actions_per_column = {}
         for column in df.columns:
             if df[column].apply(lambda x: isinstance(x, list)).any():

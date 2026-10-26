@@ -247,3 +247,40 @@ def test_critical_without_current_workflow_name_keeps_instance_name(mocker):
     post = mocker.patch("d2b_data.workflow_logger.requests.post")
     build("wf-keep", webhook_url=WEBHOOK).critical("x", current_workflow_name=None)
     assert post.call_args.kwargs["json"] == {"message": "[wf-keep] x"}
+
+
+# --------------------------------------------------------------------- #
+# resolve_logger
+# --------------------------------------------------------------------- #
+def test_resolve_logger_returns_new_parameter_without_warning(recwarn):
+    """Only `logger` given: returned as is, no deprecation warning."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    sentinel = object()
+    assert resolve_logger(sentinel, None, "X") is sentinel
+    assert len(recwarn) == 0
+
+
+def test_resolve_logger_accepts_deprecated_alias_with_warning():
+    """Only `verbose_logger` given: used, with a DeprecationWarning naming the owner."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    sentinel = object()
+    with pytest.warns(DeprecationWarning, match="Owner: el parámetro 'verbose_logger'"):
+        assert resolve_logger(None, sentinel, "Owner") is sentinel
+
+
+def test_resolve_logger_prefers_new_parameter_when_both_given():
+    """Both given: `logger` wins and the alias still warns."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    new, old = object(), object()
+    with pytest.warns(DeprecationWarning):
+        assert resolve_logger(new, old, "X") is new
+
+
+def test_resolve_logger_none_when_neither_given():
+    """Neither given: None, so each class builds its default logger."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    assert resolve_logger(None, None, "X") is None

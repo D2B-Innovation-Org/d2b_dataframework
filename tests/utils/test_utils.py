@@ -233,3 +233,53 @@ def test_extract_credentials_reports_unexpected_error(credentials_csv, valid_cre
 
     assert extract_and_write_temp_credentials("Cliente Uno", path, logger, WORKFLOW, {}) == (None, None)
     assert logger.has_critical("Error general leyendo CSV")
+
+
+# --------------------------------------------------------------------- #
+# Nombre del parámetro del logger
+# --------------------------------------------------------------------- #
+def test_extract_credentials_accepts_logger_keyword(credentials_csv, valid_credentials, logger):
+    """The new `logger=` keyword works without deprecation warnings."""
+    path = credentials_csv([["Cliente Uno", "d2b-cliente-uno", valid_credentials]])
+    temp_path, name = extract_and_write_temp_credentials(
+        client_name_from_map="Cliente Uno",
+        source_csv_path=path,
+        logger=logger,
+        current_workflow_name_param=WORKFLOW,
+        project_map_dict={"Cliente Uno": "d2b-cliente-uno"},
+    )
+    os.remove(temp_path)
+    assert name == "Cliente Uno"
+
+
+def test_extract_credentials_accepts_deprecated_keyword(credentials_csv, valid_credentials, logger):
+    """el-* functions still calling verbose_logger_param= keep working, with a warning."""
+    path = credentials_csv([["Cliente Uno", "d2b-cliente-uno", valid_credentials]])
+    with pytest.warns(DeprecationWarning, match="extract_and_write_temp_credentials"):
+        temp_path, name = extract_and_write_temp_credentials(
+            client_name_from_map="Cliente Uno",
+            source_csv_path=path,
+            verbose_logger_param=logger,
+            current_workflow_name_param=WORKFLOW,
+            project_map_dict={"Cliente Uno": "d2b-cliente-uno"},
+        )
+    os.remove(temp_path)
+    assert name == "Cliente Uno"
+
+
+def test_extract_credentials_without_logger_raises(credentials_csv):
+    """Omitting the logger is still an error, as it was when it was positional."""
+    with pytest.raises(TypeError, match="logger"):
+        extract_and_write_temp_credentials("Cliente Uno", "x.csv", project_map_dict={})
+
+
+def test_load_schema_accepts_deprecated_keyword(in_tmp_cwd, logger):
+    """verbose_logger_func= still works during the migration, with a warning."""
+    with pytest.warns(DeprecationWarning, match="load_schema_from_csv"):
+        assert load_schema_from_csv(verbose_logger_func=logger, wf_name_func=WORKFLOW) is None
+
+
+def test_load_schema_without_logger_raises(in_tmp_cwd):
+    """Omitting the logger raises a clear TypeError."""
+    with pytest.raises(TypeError, match="logger"):
+        load_schema_from_csv()

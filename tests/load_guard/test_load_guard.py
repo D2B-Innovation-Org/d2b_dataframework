@@ -108,7 +108,7 @@ def test_not_loaded_when_an_account_is_missing():
     assert not guard.already_loaded(
         "facebook", TARGET, ["111", "222"], SINCE, UNTIL, now=NOW
     )
-    assert "['222']" in logger.log.call_args.args[0]
+    assert "['222']" in logger.info.call_args.args[0]
 
 
 def test_not_loaded_without_accounts_and_no_query():
@@ -122,7 +122,7 @@ def test_query_failure_means_load_anyway():
     """If the control table cannot be read, the function must still load."""
     guard, _, logger = build(query_error=RuntimeError("403 Access Denied"))
     assert not guard.already_loaded("facebook", TARGET, ["111"], SINCE, UNTIL, now=NOW)
-    assert "se carga igual" in logger.log.call_args.args[0]
+    assert "se carga igual" in logger.warning.call_args.args[0]
 
 
 def test_query_parameters():
@@ -222,14 +222,14 @@ def test_record_returns_false_on_insert_errors():
     """BigQuery row errors are logged, not raised."""
     guard, _, logger = build(insert_result=[{"index": 0, "errors": ["bad"]}])
     assert guard.record(**record_kwargs()) is False
-    assert "no se pudo registrar" in logger.log.call_args.args[0]
+    assert "no se pudo registrar" in logger.warning.call_args.args[0]
 
 
 def test_record_returns_false_on_exception():
     """A network or permission error never breaks the finished load."""
     guard, _, logger = build(insert_error=RuntimeError("403"))
     assert guard.record(**record_kwargs()) is False
-    assert "403" in logger.log.call_args.args[0]
+    assert "403" in logger.warning.call_args.args[0]
 
 
 # --------------------------------------------------------------------- #
@@ -251,3 +251,17 @@ def test_works_without_logger():
     client.query.side_effect = RuntimeError("x")
     guard = LoadGuard(client=client)
     assert guard.already_loaded("facebook", TARGET, ["1"], SINCE, UNTIL, now=NOW) is False
+
+
+def test_works_with_real_workflow_logger():
+    """WorkflowLogger satisfies the logger contract load_guard relies on."""
+    from d2b_data.workflow_logger import WorkflowLogger
+
+    client = MagicMock()
+    client.query.side_effect = RuntimeError("x")
+    client.insert_rows_json.side_effect = RuntimeError("y")
+    guard = LoadGuard(
+        client=client, logger=WorkflowLogger("wf-guard", alerts_enabled=False)
+    )
+    assert guard.already_loaded("facebook", TARGET, ["1"], SINCE, UNTIL, now=NOW) is False
+    assert guard.record(**record_kwargs()) is False

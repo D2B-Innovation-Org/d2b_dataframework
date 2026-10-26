@@ -5,6 +5,7 @@ from typing import Any, Optional, Union
 import pandas as pd
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from d2b_data.workflow_logger import resolve_logger
 
 
 class YouTubePublic:
@@ -22,24 +23,27 @@ class YouTubePublic:
     def __init__(
         self,
         api_key: str,
-        verbose_logger: Optional[Any] = None,
+        logger: Optional[Any] = None,
+        *,
+        verbose_logger=None,
     ) -> None:
         """Initialise the public YouTube API connector.
 
         Args:
             api_key: Google Cloud developer API key with YouTube Data API v3
                 enabled.
-            verbose_logger: Logger object with ``.log()`` and ``.critical()``
+            logger: Logger object with ``.log()`` and ``.critical()``
                 methods. Defaults to a stdlib-based adapter when omitted.
         """
+        logger = resolve_logger(logger, verbose_logger, "YouTubePublic")
         self.api_key = api_key
-        self.verbose = (
-            verbose_logger if verbose_logger else self._build_default_logger()
+        self.logger = (
+            logger if logger else self._build_default_logger()
         )
         self.service = build(
             "youtube", "v3", developerKey=api_key, cache_discovery=False
         )
-        self.verbose.log(
+        self.logger.log(
             "--- EXECUTING YouTubePublic Class v1.0 "
             f"- Initialized at {datetime.now(UTC).isoformat()} ---"
         )
@@ -168,13 +172,13 @@ class YouTubePublic:
             response = self.service.channels().list(part=part, **kwargs).execute()
             items = response.get("items", [])
             if not items:
-                self.verbose.log("No channels found with the given parameters.")
+                self.logger.log("No channels found with the given parameters.")
                 return pd.DataFrame()
 
             return pd.json_normalize(items)
 
         except Exception as e:
-            self.verbose.critical(f"Error listing channels: {e}")
+            self.logger.critical(f"Error listing channels: {e}")
             raise e
 
     # ------------------------------------------------------------------
@@ -209,12 +213,12 @@ class YouTubePublic:
                 item["contentDetails"]["videoId"] for item in response.get("items", [])
             ]
             next_page = response.get("nextPageToken")
-            self.verbose.log(f"  Page processed. Accumulated videos: {len(video_ids)}")
+            self.logger.log(f"  Page processed. Accumulated videos: {len(video_ids)}")
 
             if not next_page:
                 break
 
-        self.verbose.log(f"Total videos in playlist '{playlist_id}': {len(video_ids)}")
+        self.logger.log(f"Total videos in playlist '{playlist_id}': {len(video_ids)}")
         return video_ids
 
     def get_video_statistics(
@@ -236,7 +240,7 @@ class YouTubePublic:
             DataFrame with one row per video.
         """
         if not video_ids:
-            self.verbose.log("Empty video_ids list.")
+            self.logger.log("Empty video_ids list.")
             return pd.DataFrame()
 
         all_items: list[dict[str, Any]] = []
@@ -246,10 +250,10 @@ class YouTubePublic:
                 self.service.videos().list(part=part, id=",".join(batch)).execute()
             )
             all_items += response.get("items", [])
-            self.verbose.log(f"  Batch {i // 50 + 1}: {len(batch)} videos queried.")
+            self.logger.log(f"  Batch {i // 50 + 1}: {len(batch)} videos queried.")
 
         if not all_items:
-            self.verbose.log("No video data found.")
+            self.logger.log("No video data found.")
             return pd.DataFrame()
 
         df = self._normalize_df_columns(pd.json_normalize(all_items))
@@ -279,14 +283,14 @@ class YouTubePublic:
 
         items = channel_response.get("items", [])
         if not items:
-            self.verbose.critical(f"Channel '{channel_id}' not found.")
+            self.logger.critical(f"Channel '{channel_id}' not found.")
             return []
 
         uploads_id: str = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-        self.verbose.log(f"Uploads playlist: {uploads_id}")
+        self.logger.log(f"Uploads playlist: {uploads_id}")
 
         video_ids = self.get_playlist_videos(uploads_id)
-        self.verbose.log(f"Total videos found: {len(video_ids)}")
+        self.logger.log(f"Total videos found: {len(video_ids)}")
 
         all_items: list[dict[str, Any]] = []
         for i in range(0, len(video_ids), 50):
@@ -295,7 +299,7 @@ class YouTubePublic:
                 self.service.videos().list(part=part, id=",".join(batch)).execute()
             )
             all_items += response.get("items", [])
-            self.verbose.log(f"  Batch {i // 50 + 1}: {len(batch)} videos queried.")
+            self.logger.log(f"  Batch {i // 50 + 1}: {len(batch)} videos queried.")
 
         return all_items
 
@@ -325,7 +329,7 @@ class YouTubePublic:
         raw = self._get_channel_videos_raw(channel_id, part=part)
 
         if not raw:
-            self.verbose.log("No videos found for the channel.")
+            self.logger.log("No videos found for the channel.")
             return pd.DataFrame()
 
         df = self._normalize_df_columns(pd.json_normalize(raw))
@@ -399,19 +403,19 @@ class YouTubePublic:
                         e.error_details[0].get("reason", "") if e.error_details else ""
                     )
                     if reason == "commentsDisabled":
-                        self.verbose.log(
+                        self.logger.log(
                             f"  Video '{video_id}': comments disabled, skipping."
                         )
                         break
                     # insufficientPermissions or any other 403 — propagate.
-                self.verbose.critical(
+                self.logger.critical(
                     f"  Video '{video_id}': HTTP error {e.resp.status}. Re-raising."
                 )
                 raise e
 
             all_comments += response.get("items", [])
             next_page = response.get("nextPageToken")
-            self.verbose.log(
+            self.logger.log(
                 f"  Video '{video_id}': {len(all_comments)} comments accumulated."
             )
 
@@ -485,16 +489,16 @@ class YouTubePublic:
         """
         raw_videos = self._get_channel_videos_raw(channel_id, part=part)
         if not raw_videos:
-            self.verbose.critical("No videos found for the channel.")
+            self.logger.critical("No videos found for the channel.")
             return pd.DataFrame()
 
         video_ids: list[str] = [v["id"] for v in raw_videos if "id" in v]
-        self.verbose.log(f"Fetching comments from {len(video_ids)} videos...")
+        self.logger.log(f"Fetching comments from {len(video_ids)} videos...")
 
         frames: list[pd.DataFrame] = []
         for video_id in video_ids:
             df_comments = self.get_video_comments_df(video_id, columns=columns)
-            self.verbose.log(
+            self.logger.log(
                 f"Video '{video_id}': {len(df_comments)} comments retrieved."
             )
             if not df_comments.empty:
@@ -502,7 +506,7 @@ class YouTubePublic:
                 frames.append(df_comments)
 
         if not frames:
-            self.verbose.log("No videos had available comments.")
+            self.logger.log("No videos had available comments.")
             return pd.DataFrame()
 
         return pd.concat(frames, ignore_index=True)

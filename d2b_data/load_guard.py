@@ -37,10 +37,10 @@ WHERE DATE(loaded_at) >= DATE(@cutoff)
 
 
 class _NullLogger:
-    def log(self, *args: Any, **kwargs: Any) -> None:
+    def info(self, *args: Any, **kwargs: Any) -> None:
         pass
 
-    def critical(self, *args: Any, **kwargs: Any) -> None:
+    def warning(self, *args: Any, **kwargs: Any) -> None:
         pass
 
 
@@ -80,8 +80,8 @@ class LoadGuard:
                 función), no con las del cliente.
             table_id: Tabla de control.
             timezone_name: Zona horaria de la hora de corte.
-            logger: Objeto con métodos log() y critical(), por ejemplo
-                WorkflowLogger o Verbose. Si es None no registra nada.
+            logger: WorkflowLogger, o cualquier objeto con info() y
+                warning(). Si es None no registra nada.
         """
         self._client = client
         self.table_id = table_id
@@ -176,21 +176,21 @@ class LoadGuard:
             rows = self.client.query(sql, job_config=job_config).result()
             loaded = {row["account"] for row in rows}
         except Exception as error:
-            self.logger.log(
-                f"load_guard | ADVERTENCIA: no se pudo leer {self.table_id}, "
+            self.logger.warning(
+                f"load_guard | no se pudo leer {self.table_id}, "
                 f"se carga igual: {error}"
             )
             return False
 
         missing = sorted(wanted - loaded)
         if missing:
-            self.logger.log(
+            self.logger.info(
                 f"load_guard | {source} -> {target}: faltan cargas de hoy para "
                 f"{missing}"
             )
             return False
 
-        self.logger.log(
+        self.logger.info(
             f"load_guard | {source} -> {target}: todas las cuentas ya se "
             f"cargaron hoy después de las {fresh_after_hour:02d}:00"
         )
@@ -256,8 +256,8 @@ class LoadGuard:
             insert_errors = [str(insert_exception)]
 
         if insert_errors:
-            self.logger.log(
-                f"load_guard | ADVERTENCIA: no se pudo registrar la carga de "
+            self.logger.warning(
+                f"load_guard | no se pudo registrar la carga de "
                 f"{row['account']} en {self.table_id}: {insert_errors}"
             )
             return False

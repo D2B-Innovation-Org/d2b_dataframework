@@ -12,7 +12,7 @@ from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 
 import d2b_data.Google_Token_MNG
-from d2b_data.workflow_logger import WorkflowLogger
+from d2b_data.workflow_logger import WorkflowLogger, resolve_logger
 
 
 class GoogleSearchConsole:
@@ -27,10 +27,12 @@ class GoogleSearchConsole:
         self,
         client_secret: str | None = None,
         token_json: str | None = None,
-        verbose_logger: (WorkflowLogger | None) = None,
+        logger: (WorkflowLogger | None) = None,
         auto_paginate: bool = True,
         row_limit: int = 25_000,
         use_service_account: bool = False,
+        *,
+        verbose_logger=None,
     ) -> None:
         """
 
@@ -40,7 +42,7 @@ class GoogleSearchConsole:
                 OAuth client secret path or Service Account JSON path.
             token_json:
                 OAuth token path. It can be None when using a Service Account.
-            verbose_logger:
+            logger:
                 WorkflowLogger instance used during execution. If omitted,
                 an internal logger with alerts disabled is created.
             auto_paginate:
@@ -50,6 +52,7 @@ class GoogleSearchConsole:
             use_service_account:
                 Indicates whether Service Account authentication should be used.
         """
+        logger = resolve_logger(logger, verbose_logger, "GoogleSearchConsole")
         self.default_api_name: str = "searchconsole"
         self.default_version: str = "v1"
         self.client_secret: str | None = client_secret
@@ -57,7 +60,7 @@ class GoogleSearchConsole:
         self.auto_paginate: bool = auto_paginate
         self.row_limit: int = row_limit
         self.use_service_account: bool = use_service_account
-        self.logger: WorkflowLogger = verbose_logger or self._build_default_logger()
+        self.logger: WorkflowLogger = logger or self._build_default_logger()
 
         self.logger.info(
             "--- EXECUTING Google_Search_Console Class v1.0 "
