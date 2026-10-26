@@ -211,6 +211,24 @@ def test_get_report_returns_records_on_job_completed(fb, mocker):
     assert result == [{"impressions": "500", "spend": "10"}]
 
 
+def test_get_report_skips_record_that_fails_to_export(fb, mocker):
+    """A record that fails export_all_data is skipped instead of breaking the run."""
+    good = MagicMock()
+    good.export_all_data.return_value = {"spend": "10"}
+    bad = MagicMock()
+    bad.export_all_data.side_effect = ValueError("bad record")
+    async_job = MagicMock()
+    async_job.api_get.return_value = {"async_status": "Job Completed"}
+    async_job.get_result.return_value = [bad, good]
+
+    mock_account = MagicMock()
+    mock_account.get_insights.return_value = async_job
+    mocker.patch("d2b_data.Facebook_Marketing.AdAccount", return_value=mock_account)
+    mocker.patch("time.sleep")
+
+    assert fb.get_report({}, "act_123") == [{"spend": "10"}]
+
+
 def test_get_report_downloads_result_in_large_pages(fb, mocker):
     """Results are paged with page_size rows instead of Meta's default of 25."""
     async_job = _make_async_job(["Job Completed", "Job Completed"], records=[])

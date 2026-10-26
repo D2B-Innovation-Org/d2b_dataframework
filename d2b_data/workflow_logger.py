@@ -67,6 +67,17 @@ class WorkflowLogger:
         self.workflow_name = workflow_name
         self.logger.name = workflow_name
 
+    def log(self, message: str) -> None:
+        """Registra un mensaje informativo; alias de info().
+
+        Existe para que WorkflowLogger reemplace a Verbose sin cambiar las
+        clases de d2b_data que llaman a `verbose.log(...)`.
+
+        Args:
+            message: Texto a registrar.
+        """
+        self.info(message)
+
     def debug(self, message: str) -> None:
         if self.active:
             self.logger.debug(message)
@@ -94,14 +105,27 @@ class WorkflowLogger:
         *,
         exc_info: bool = False,
         send_alert: bool = True,
+        current_workflow_name: Optional[str] = None,
     ) -> None:
+        """Registra un error crítico y, si corresponde, envía la alerta.
+
+        Args:
+            message: Texto del error.
+            exc_info: Si es True, adjunta el traceback de la excepción activa.
+            send_alert: Si es False, no envía la alerta en esta llamada.
+            current_workflow_name: Nombre a usar en la alerta en vez del
+                workflow_name de la instancia. Mantiene la firma de
+                Verbose.critical para que las clases existentes funcionen.
+        """
         if self.active:
             self.logger.critical(message, exc_info=exc_info)
 
         if self.alerts_enabled and send_alert:
-            self._send_alert(message)
+            self._send_alert(message, current_workflow_name)
 
-    def _send_alert(self, message: str) -> None:
+    def _send_alert(
+        self, message: str, workflow_name: Optional[str] = None
+    ) -> None:
         if not self.webhook_url:
             self.logger.warning(
                 "No se envió la alerta: webhook_url no está configurado."
@@ -109,7 +133,7 @@ class WorkflowLogger:
             return
 
         payload = {
-            "message": f"[{self.workflow_name}] {message}",
+            "message": f"[{workflow_name or self.workflow_name}] {message}",
         }
 
         try:

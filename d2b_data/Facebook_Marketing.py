@@ -255,8 +255,7 @@ class Facebook_Marketing:
                         records.append(record.export_all_data())
                     except Exception as e:
                         self.verbose.log(
-                            f"get_report | Error procesando un registro: {str(e)}",
-                            current_workflow_name=self.workflow_name,
+                            f"get_report | Error procesando un registro: {str(e)}"
                         )
                         continue
 
