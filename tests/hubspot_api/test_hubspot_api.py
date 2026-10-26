@@ -13,7 +13,7 @@ def logger(mocker):
 
 @pytest.fixture
 def hs(logger):
-    return HubSpot_API(token="fake-token", verbose_logger=logger)
+    return HubSpot_API(token="fake-token", logger=logger)
 
 
 def http_error(status_code, text="denied"):

@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 import pandas as pd
 import requests
+from d2b_data.workflow_logger import resolve_logger
 
 
 class QuotaExhaustedError(Exception):
@@ -39,11 +40,14 @@ class LinkedinOrganic:
     def __init__(
         self,
         token_path: Optional[str] = None,
-        verbose_logger: Optional[object] = None,
+        logger: Optional[object] = None,
+        *,
+        verbose_logger=None,
     ) -> None:
+        logger = resolve_logger(logger, verbose_logger, "LinkedinOrganic")
         self.token_path = token_path or "token_linkedin_organic.json"
-        self.verbose = verbose_logger or self._build_default_logger()
-        self.verbose.log(
+        self.logger = logger or self._build_default_logger()
+        self.logger.log(
             "--- EXECUTING LinkedinOrganic Class v2.0 "
             f"- Initialized at {datetime.now(UTC).isoformat()} ---"
         )
@@ -54,13 +58,13 @@ class LinkedinOrganic:
             self._load_token_from_file()
             if self.token:
                 self._set_headers()
-                self.verbose.log(
+                self.logger.log(
                     f"LinkedinOrganic instantiated with token from {self.token_path}."
                 )
             else:
-                self.verbose.log(f"No token found in {self.token_path}.")
+                self.logger.log(f"No token found in {self.token_path}.")
         else:
-            self.verbose.log(
+            self.logger.log(
                 "Token file not specified. Use get_access_token to "
                 "generate and save a new token."
             )
@@ -87,11 +91,11 @@ class LinkedinOrganic:
             with open(self.token_path, "r") as fh:
                 data = json.load(fh)
         except Exception as exc:
-            self.verbose.log(f"Error loading token from file: {exc}")
+            self.logger.log(f"Error loading token from file: {exc}")
             return None
 
         if "access_token" not in data:
-            self.verbose.log("Token file is missing 'access_token' field.")
+            self.logger.log("Token file is missing 'access_token' field.")
             return None
 
         self.token = data["access_token"]
@@ -100,7 +104,7 @@ class LinkedinOrganic:
     def _set_headers(self) -> None:
         """Build the headers dict required by the LinkedIn REST API."""
         if not self.token:
-            self.verbose.critical("Cannot set headers: access token is missing.")
+            self.logger.critical("Cannot set headers: access token is missing.")
             return
 
         self.headers = {
@@ -109,7 +113,7 @@ class LinkedinOrganic:
             "LinkedIn-Version": "202606",
             "Content-Type": "application/json",
         }
-        self.verbose.log("LinkedIn API headers configured.")
+        self.logger.log("LinkedIn API headers configured.")
 
     # ------------------------------------------------------------------
     # HTTP helper
@@ -159,7 +163,7 @@ class LinkedinOrganic:
 
             if response.status_code in transient_codes and attempt < max_retries:
                 wait = 2**attempt
-                self.verbose.log(
+                self.logger.log(
                     f"Transient {response.status_code}, "
                     f"retrying in {wait}s "
                     f"(attempt {attempt + 1}/{max_retries})..."
@@ -191,15 +195,15 @@ class LinkedinOrganic:
         if role:
             url += f"&role={role}"
 
-        self.verbose.log("GET managed organizations...")
+        self.logger.log("GET managed organizations...")
         try:
             data = self._request_get(url)
-            self.verbose.log(
+            self.logger.log(
                 f"Retrieved {len(data.get('elements', []))} organization ACLs."
             )
             return data
         except requests.exceptions.RequestException as exc:
-            self.verbose.critical(f"LinkedIn API Error: {exc}")
+            self.logger.critical(f"LinkedIn API Error: {exc}")
             return None
 
     def _get_follower_stats_raw(self, org_id: str) -> Optional[dict]:
@@ -219,15 +223,15 @@ class LinkedinOrganic:
             f"&organizationalEntity={urn_encoded}"
         )
 
-        self.verbose.log(f"GET follower stats for org {org_id}...")
+        self.logger.log(f"GET follower stats for org {org_id}...")
         try:
             data = self._request_get(url)
-            self.verbose.log(
+            self.logger.log(
                 f"Retrieved {len(data.get('elements', []))} follower stat elements."
             )
             return data
         except requests.exceptions.RequestException as exc:
-            self.verbose.critical(f"LinkedIn API Error: {exc}")
+            self.logger.critical(f"LinkedIn API Error: {exc}")
             return None
 
     def _fetch_paginated_posts(
@@ -254,7 +258,7 @@ class LinkedinOrganic:
                 tzinfo=timezone.utc
             )
         except ValueError as exc:
-            self.verbose.critical(f"Date format error (use YYYY-MM-DD): {exc}")
+            self.logger.critical(f"Date format error (use YYYY-MM-DD): {exc}")
             return None
 
         urn_encoded = quote(f"urn:li:organization:{org_id}")
@@ -262,7 +266,7 @@ class LinkedinOrganic:
         start_index = 0
         page_size = 50
 
-        self.verbose.log(
+        self.logger.log(
             f"Fetching posts for org {org_id} between {start_date} and {end_date}..."
         )
 
@@ -276,15 +280,15 @@ class LinkedinOrganic:
             try:
                 data = self._request_get(url)
             except requests.exceptions.RequestException as exc:
-                self.verbose.critical(f"LinkedIn API Error during pagination: {exc}")
+                self.logger.critical(f"LinkedIn API Error during pagination: {exc}")
                 break
 
             elements = data.get("elements", [])
             if not elements:
-                self.verbose.log("No more posts available.")
+                self.logger.log("No more posts available.")
                 break
 
-            self.verbose.log(
+            self.logger.log(
                 f"Processing batch of {len(elements)} posts (offset {start_index})..."
             )
 
@@ -303,7 +307,7 @@ class LinkedinOrganic:
                     collected.append(post)
                 else:
                     # Older than range — everything after is older too
-                    self.verbose.log(
+                    self.logger.log(
                         f"Reached post from {post_dt:%Y-%m-%d}, "
                         "older than start_date. Stopping."
                     )
@@ -315,7 +319,7 @@ class LinkedinOrganic:
 
             start_index += page_size
 
-        self.verbose.log(f"Collected {len(collected)} posts in date range.")
+        self.logger.log(f"Collected {len(collected)} posts in date range.")
         return collected
 
     def _get_posts_raw(
@@ -350,7 +354,7 @@ class LinkedinOrganic:
             Dict keyed by URN with engagement data, or None on failure.
         """
         if not post_urns:
-            self.verbose.log("No post URNs provided.")
+            self.logger.log("No post URNs provided.")
             return {}
 
         results = {}
@@ -362,9 +366,9 @@ class LinkedinOrganic:
             except QuotaExhaustedError:
                 raise
             except requests.exceptions.RequestException as exc:
-                self.verbose.critical(f"Social Actions API Error for {urn}: {exc}")
+                self.logger.critical(f"Social Actions API Error for {urn}: {exc}")
 
-        self.verbose.log(
+        self.logger.log(
             f"Retrieved engagement for {len(results)}/{len(post_urns)} posts."
         )
         return results
@@ -418,7 +422,7 @@ class LinkedinOrganic:
 
         elements = raw.get("elements", [])
         if not elements:
-            self.verbose.log("No follower stat elements returned.")
+            self.logger.log("No follower stat elements returned.")
             return pd.DataFrame()
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -577,13 +581,13 @@ class LinkedinOrganic:
         try:
             df_eng = self.get_engagement(urns)
         except QuotaExhaustedError:
-            self.verbose.critical(
+            self.logger.critical(
                 "Engagement quota exhausted. Returning posts without engagement data."
             )
             return df_posts
 
         if df_eng is None or df_eng.empty:
-            self.verbose.log("No engagement data returned; returning posts only.")
+            self.logger.log("No engagement data returned; returning posts only.")
             return df_posts
 
         merged = df_posts.merge(df_eng, on="post_urn", how="left")
@@ -591,7 +595,7 @@ class LinkedinOrganic:
             if col in merged.columns:
                 merged[col] = merged[col].fillna(0).astype(int)
 
-        self.verbose.log(f"Merged {len(merged)} posts with engagement data.")
+        self.logger.log(f"Merged {len(merged)} posts with engagement data.")
         return merged
 
     # ------------------------------------------------------------------
@@ -635,16 +639,16 @@ class LinkedinOrganic:
         if cache_file.exists():
             try:
                 cache = json.loads(cache_file.read_text())
-                self.verbose.log(f"Loaded {len(cache)} cached engagement entries.")
+                self.logger.log(f"Loaded {len(cache)} cached engagement entries.")
             except (json.JSONDecodeError, OSError) as exc:
-                self.verbose.log(f"Cache read failed, starting fresh: {exc}")
+                self.logger.log(f"Cache read failed, starting fresh: {exc}")
 
         # Find URNs that still need fetching
         all_urns = df_posts["post_urn"].tolist()
         missing_urns = [u for u in all_urns if u not in cache]
 
         if missing_urns:
-            self.verbose.log(
+            self.logger.log(
                 f"{len(missing_urns)} URNs not in cache, fetching from API..."
             )
             try:
@@ -653,15 +657,15 @@ class LinkedinOrganic:
                     # raw is a dict keyed by URN from socialActions
                     cache.update(raw)
                     cache_file.write_text(json.dumps(cache, indent=2))
-                    self.verbose.log(f"Cache updated: {len(cache)} total entries.")
+                    self.logger.log(f"Cache updated: {len(cache)} total entries.")
             except QuotaExhaustedError:
-                self.verbose.critical(
+                self.logger.critical(
                     "Quota hit. Returning partial results from "
                     f"cache ({len(cache)} entries). "
                     "Re-run after midnight UTC for the rest."
                 )
         else:
-            self.verbose.log("All URNs found in cache, no API call needed.")
+            self.logger.log("All URNs found in cache, no API call needed.")
 
         # Build engagement DataFrame from cache
         rows = []
@@ -682,7 +686,7 @@ class LinkedinOrganic:
                 )
 
         if not rows:
-            self.verbose.log("No engagement data available yet. Returning posts only.")
+            self.logger.log("No engagement data available yet. Returning posts only.")
             return df_posts
 
         df_eng = pd.DataFrame(rows)
@@ -693,7 +697,7 @@ class LinkedinOrganic:
 
         cached_count = len(rows)
         total_count = len(all_urns)
-        self.verbose.log(
+        self.logger.log(
             f"Merged {cached_count}/{total_count} posts with engagement data."
         )
         return merged

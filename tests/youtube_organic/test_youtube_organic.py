@@ -23,13 +23,13 @@ def test_instantiation_uses_custom_logger(mocker):
     from d2b_data.youtube_public import YouTubePublic
 
     custom_logger = MagicMock()
-    yt = YouTubePublic(api_key="key", verbose_logger=custom_logger)
-    assert yt.verbose is custom_logger
+    yt = YouTubePublic(api_key="key", logger=custom_logger)
+    assert yt.logger is custom_logger
 
 
 def test_instantiation_uses_default_logger_when_none(yt):
-    assert hasattr(yt.verbose, "log")
-    assert hasattr(yt.verbose, "critical")
+    assert hasattr(yt.logger, "log")
+    assert hasattr(yt.logger, "critical")
 
 
 # ---------------------------------------------------------------------------

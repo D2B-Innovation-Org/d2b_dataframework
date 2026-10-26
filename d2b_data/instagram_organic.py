@@ -4,6 +4,7 @@ from typing import Optional
 
 import pandas as pd
 import requests
+from d2b_data.workflow_logger import resolve_logger
 
 
 class InstagramOrganic:
@@ -24,6 +25,8 @@ class InstagramOrganic:
     def __init__(
         self,
         access_token: str,
+        logger=None,
+        *,
         verbose_logger=None,
     ) -> None:
         """Initialize the Instagram_Organic client.
@@ -31,18 +34,19 @@ class InstagramOrganic:
         Args:
             access_token: A valid Page Access Token with instagram_basic
                 and instagram_manage_insights permissions.
-            verbose_logger: Optional logger instance. Must expose a .log()
+            logger: Optional logger instance. Must expose a .log()
                 and .critical() method. If None, falls back to stdlib logging.
         """
+        logger = resolve_logger(logger, verbose_logger, "InstagramOrganic")
         self.access_token = access_token
         self.BASE_URL = "https://graph.facebook.com/v20.0"
         self.MEDIA_FIELDS = (
             "id,caption,timestamp,media_type,media_product_type,permalink"
         )
-        self.verbose = (
-            verbose_logger if verbose_logger else self._build_default_logger()
+        self.logger = (
+            logger if logger else self._build_default_logger()
         )
-        self.verbose.log(
+        self.logger.log(
             "--- EXECUTING Instagram_Organic Class v1.0 "
             f"- Initialized at {datetime.now(UTC).isoformat()} ---"
         )
@@ -91,7 +95,7 @@ class InstagramOrganic:
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
-            self.verbose.critical(
+            self.logger.critical(
                 f"_get | HTTP error for {endpoint}: {exc} — "
                 f"Response body: {response.text[:500]}"
             )
@@ -105,7 +109,7 @@ class InstagramOrganic:
                 f"_get | Graph API error for {endpoint}: "
                 f"[{error.get('code')}] {error.get('message')}"
             )
-            self.verbose.critical(message)
+            self.logger.critical(message)
             raise ValueError(message)
 
         return payload
@@ -132,7 +136,7 @@ class InstagramOrganic:
             results.extend(data)
             page_count += 1
 
-            self.verbose.log(
+            self.logger.log(
                 f"_paginate | Page {page_count}: fetched {len(data)} records "
                 f"(total so far: {len(results)})"
             )
@@ -146,7 +150,7 @@ class InstagramOrganic:
 
             params = {**params, "after": after_cursor}
 
-        self.verbose.log(
+        self.logger.log(
             f"_paginate | Completed: {len(results)} total records across "
             f"{page_count} page(s) for {endpoint}"
         )
@@ -173,7 +177,7 @@ class InstagramOrganic:
         Returns:
             List of media dictionaries matching the requested type.
         """
-        self.verbose.log(
+        self.logger.log(
             f"_get_media | Fetching {media_product_type} media for "
             f"{ig_account_id} from {since} to {until}"
         )
@@ -191,7 +195,7 @@ class InstagramOrganic:
             m for m in all_media if m.get("media_product_type") == media_product_type
         ]
 
-        self.verbose.log(
+        self.logger.log(
             f"_get_media | {len(filtered)} {media_product_type} items "
             f"out of {len(all_media)} total media"
         )
@@ -209,7 +213,7 @@ class InstagramOrganic:
         Returns:
             List of story dictionaries.
         """
-        self.verbose.log(f"_get_stories | Fetching active stories for {ig_account_id}")
+        self.logger.log(f"_get_stories | Fetching active stories for {ig_account_id}")
 
         params = {
             "fields": self.MEDIA_FIELDS,
@@ -218,7 +222,7 @@ class InstagramOrganic:
 
         stories = self._paginate(f"/{ig_account_id}/stories", params)
 
-        self.verbose.log(f"_get_stories | {len(stories)} active stories found")
+        self.logger.log(f"_get_stories | {len(stories)} active stories found")
         return stories
 
     def _get_media_insights(
@@ -237,7 +241,7 @@ class InstagramOrganic:
             Returns an empty dict if the request fails, so callers can
             continue processing remaining media.
         """
-        self.verbose.log(
+        self.logger.log(
             f"_get_media_insights | Fetching {len(metrics)} metrics for {media_id}"
         )
 
@@ -249,12 +253,12 @@ class InstagramOrganic:
         try:
             response = self._get(f"/{media_id}/insights", params)
             flat = self._flatten_insights(response.get("data", []))
-            self.verbose.log(
+            self.logger.log(
                 f"_get_media_insights | {media_id} — {len(flat)} metrics extracted"
             )
             return flat
         except (ValueError, requests.HTTPError) as exc:
-            self.verbose.critical(
+            self.logger.critical(
                 f"_get_media_insights | Failed for {media_id}: {exc}. Skipping."
             )
             return {}
@@ -311,7 +315,7 @@ class InstagramOrganic:
             if media_list is empty.
         """
         if not media_list:
-            self.verbose.log(
+            self.logger.log(
                 "_build_dataframe | No media to process, returning empty DataFrame"
             )
             return pd.DataFrame()
@@ -337,7 +341,7 @@ class InstagramOrganic:
         df = pd.DataFrame(records)
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
-        self.verbose.log(f"_build_dataframe | DataFrame shape: {df.shape}")
+        self.logger.log(f"_build_dataframe | DataFrame shape: {df.shape}")
         return df
 
     def get_feed(
@@ -360,7 +364,7 @@ class InstagramOrganic:
             metadata and insight metrics.
         """
         since, until = self._resolve_dates(since, until)
-        self.verbose.log(f"get_feed | {ig_account_id} | {since} → {until}")
+        self.logger.log(f"get_feed | {ig_account_id} | {since} → {until}")
 
         media = self._get_media(ig_account_id, since, until, "FEED")
         return self._build_dataframe(media, ig_account_id, metrics)
@@ -385,7 +389,7 @@ class InstagramOrganic:
             metadata and insight metrics.
         """
         since, until = self._resolve_dates(since, until)
-        self.verbose.log(f"get_reels | {ig_account_id} | {since} → {until}")
+        self.logger.log(f"get_reels | {ig_account_id} | {since} → {until}")
 
         media = self._get_media(ig_account_id, since, until, "REELS")
         return self._build_dataframe(media, ig_account_id, metrics)
@@ -413,7 +417,7 @@ class InstagramOrganic:
             DataFrame with one row per active Story and columns for
             metadata and insight metrics.
         """
-        self.verbose.log(
+        self.logger.log(
             f"get_stories | {ig_account_id} | active stories only (last 24hs)"
         )
 
@@ -447,7 +451,7 @@ class InstagramOrganic:
             to its corresponding DataFrame.
         """
         since, until = self._resolve_dates(since, until)
-        self.verbose.log(f"get_all | {ig_account_id} | {since} → {until}")
+        self.logger.log(f"get_all | {ig_account_id} | {since} → {until}")
 
         return {
             "feed": self.get_feed(ig_account_id, feed_metrics, since, until),

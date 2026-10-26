@@ -211,3 +211,76 @@ def test_alert_is_sent_even_when_logging_is_inactive(mocker):
     post = mocker.patch("d2b_data.workflow_logger.requests.post")
     build("wf-inactive", active=False, webhook_url=WEBHOOK).critical("boom")
     post.assert_called_once()
+
+
+# --------------------------------------------------------------------- #
+# Compatibilidad con Verbose
+# --------------------------------------------------------------------- #
+def test_log_is_an_alias_of_info(caplog):
+    """log() writes an INFO record, like Verbose.log did."""
+    wf = build("wf-log")
+    with capture(wf, caplog):
+        wf.log("hola")
+    assert [(r.levelno, r.message) for r in caplog.records] == [(logging.INFO, "hola")]
+
+
+def test_log_respects_active_flag(caplog):
+    """log() is silent when the logger is inactive."""
+    wf = build("wf-log-off", active=False)
+    with capture(wf, caplog):
+        wf.log("hola")
+    assert caplog.records == []
+
+
+def test_critical_uses_current_workflow_name_in_alert(mocker):
+    """current_workflow_name overrides the instance name in the alert prefix."""
+    post = mocker.patch("d2b_data.workflow_logger.requests.post")
+    wf = build("wf-base", webhook_url=WEBHOOK)
+
+    wf.critical("CSV malformado", current_workflow_name="el-facebook")
+
+    assert post.call_args.kwargs["json"] == {"message": "[el-facebook] CSV malformado"}
+
+
+def test_critical_without_current_workflow_name_keeps_instance_name(mocker):
+    """Passing None falls back to the instance workflow_name."""
+    post = mocker.patch("d2b_data.workflow_logger.requests.post")
+    build("wf-keep", webhook_url=WEBHOOK).critical("x", current_workflow_name=None)
+    assert post.call_args.kwargs["json"] == {"message": "[wf-keep] x"}
+
+
+# --------------------------------------------------------------------- #
+# resolve_logger
+# --------------------------------------------------------------------- #
+def test_resolve_logger_returns_new_parameter_without_warning(recwarn):
+    """Only `logger` given: returned as is, no deprecation warning."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    sentinel = object()
+    assert resolve_logger(sentinel, None, "X") is sentinel
+    assert len(recwarn) == 0
+
+
+def test_resolve_logger_accepts_deprecated_alias_with_warning():
+    """Only `verbose_logger` given: used, with a DeprecationWarning naming the owner."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    sentinel = object()
+    with pytest.warns(DeprecationWarning, match="Owner: el parámetro 'verbose_logger'"):
+        assert resolve_logger(None, sentinel, "Owner") is sentinel
+
+
+def test_resolve_logger_prefers_new_parameter_when_both_given():
+    """Both given: `logger` wins and the alias still warns."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    new, old = object(), object()
+    with pytest.warns(DeprecationWarning):
+        assert resolve_logger(new, old, "X") is new
+
+
+def test_resolve_logger_none_when_neither_given():
+    """Neither given: None, so each class builds its default logger."""
+    from d2b_data.workflow_logger import resolve_logger
+
+    assert resolve_logger(None, None, "X") is None

@@ -1,12 +1,5 @@
-import sys
 import pytest
 from unittest.mock import MagicMock, patch
-
-# google-cloud-storage is not required for Facebook_Marketing logic — mock it
-# at the sys.modules level before the module is imported so the import doesn't fail.
-_gcs_mock = MagicMock()
-sys.modules.setdefault("google.cloud.storage", _gcs_mock)
-sys.modules.setdefault("google.cloud", MagicMock(storage=_gcs_mock))
 
 
 @pytest.fixture

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import requests
+from d2b_data.workflow_logger import resolve_logger
 
 
 class FacebookOrganic:
@@ -22,6 +23,8 @@ class FacebookOrganic:
     def __init__(
         self,
         access_token: str,
+        logger=None,
+        *,
         verbose_logger=None,
     ) -> None:
         """Initialize the Facebook_Organic client.
@@ -29,16 +32,17 @@ class FacebookOrganic:
         Args:
             page_id: The numeric Facebook Page ID.
             access_token: A valid Page Access Token.
-            verbose_logger: Optional logger instance. Must expose a .log()
+            logger: Optional logger instance. Must expose a .log()
                 and .critical() method. If None, falls back to stdlib logging.
         """
+        logger = resolve_logger(logger, verbose_logger, "FacebookOrganic")
         self.access_token = access_token
         self.POST_FIELDS = "id,message,created_time,like_count,comments_count,shares,comments.summary(true),reactions.summary(true)"
         self.BASE_URL = "https://graph.facebook.com/v25.0"
-        self.verbose = (
-            verbose_logger if verbose_logger else self._build_default_logger()
+        self.logger = (
+            logger if logger else self._build_default_logger()
         )
-        self.verbose.log(
+        self.logger.log(
             "--- EXECUTING FacebookOrganic Class v1.0 "
             f"- Initialized at {datetime.now(UTC).isoformat()} ---"
         )
@@ -91,7 +95,7 @@ class FacebookOrganic:
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
-            self.verbose.critical(
+            self.logger.critical(
                 f"_get | HTTP error for {endpoint}: {exc} — "
                 f"Response body: {response.text[:500]}"
             )
@@ -105,7 +109,7 @@ class FacebookOrganic:
                 f"_get | Graph API error for {endpoint}: "
                 f"[{error.get('code')}] {error.get('message')}"
             )
-            self.verbose.critical(message)
+            self.logger.critical(message)
             raise ValueError(message)
 
         return payload
@@ -132,7 +136,7 @@ class FacebookOrganic:
             results.extend(data)
             page_count += 1
 
-            self.verbose.log(
+            self.logger.log(
                 f"_paginate | Page {page_count}: fetched {len(data)} records "
                 f"(total so far: {len(results)})"
             )
@@ -147,7 +151,7 @@ class FacebookOrganic:
 
             params = {**params, "after": after_cursor}
 
-        self.verbose.log(
+        self.logger.log(
             f"_paginate | Completed: {len(results)} total records across "
             f"{page_count} page(s) for {endpoint}"
         )
@@ -212,7 +216,7 @@ class FacebookOrganic:
             List of post dictionaries as returned by the Graph API,
             with shares normalized to an integer count.
         """
-        self.verbose.log(f"get_posts | Fetching posts from {since} to {until}")
+        self.logger.log(f"get_posts | Fetching posts from {since} to {until}")
 
         params = {
             "fields": self.POST_FIELDS,
@@ -245,7 +249,7 @@ class FacebookOrganic:
             elif raw_reactions is None:
                 post["reactions"] = 0
 
-        self.verbose.log(f"get_posts | Retrieved {len(posts)} posts")
+        self.logger.log(f"get_posts | Retrieved {len(posts)} posts")
         return posts
 
     def get_post_insights(self, post_id: str, metrics: list[str]) -> dict:
@@ -261,7 +265,7 @@ class FacebookOrganic:
             continue processing remaining posts.
         """
 
-        self.verbose.log(
+        self.logger.log(
             f"get_post_insights | Fetching {len(metrics)} metrics for {post_id}"
         )
 
@@ -273,12 +277,12 @@ class FacebookOrganic:
         try:
             response = self._get(f"/{post_id}/insights", params)
             flat = self._flatten_insights(response.get("data", []))
-            self.verbose.log(
+            self.logger.log(
                 f"get_post_insights | {post_id} — {len(flat)} metrics extracted"
             )
             return flat
         except (ValueError, requests.HTTPError) as exc:
-            self.verbose.critical(
+            self.logger.critical(
                 f"get_post_insights | Failed for {post_id}: {exc}. Skipping."
             )
             return {}
@@ -332,7 +336,7 @@ class FacebookOrganic:
         else:
             raise ValueError("'end date' argument must be provided")
 
-        self.verbose.log(
+        self.logger.log(
             f"get_report_dataframe | Starting report for page {page_id} "
             f"from {since} to {until}"
         )
@@ -340,7 +344,7 @@ class FacebookOrganic:
         posts = self.get_posts(page_id, since, until)
 
         if not posts:
-            self.verbose.log(
+            self.logger.log(
                 "get_report_dataframe | No posts found for the given date range. "
                 "Returning empty DataFrame."
             )
@@ -368,7 +372,7 @@ class FacebookOrganic:
         df = pd.DataFrame(records)
         df["created_time"] = pd.to_datetime(df["created_time"], utc=True)
 
-        self.verbose.log(f"get_report_dataframe | Done. DataFrame shape: {df.shape}")
+        self.logger.log(f"get_report_dataframe | Done. DataFrame shape: {df.shape}")
         return df
 
     def __repr__(self):

@@ -3,6 +3,7 @@
 import requests
 import pandas as pd
 from typing import List, Dict, Any
+from d2b_data.workflow_logger import resolve_logger
 
 class HubSpot_API:
     """
@@ -10,11 +11,12 @@ class HubSpot_API:
     """
     BASE_URL = "https://api.hubapi.com/"
 
-    def __init__(self, token: str, verbose_logger=None):
+    def __init__(self, token: str, logger=None, *, verbose_logger=None):
+        logger = resolve_logger(logger, verbose_logger, "HubSpot_API")
         if not token:
             raise ValueError("Se requiere un token de HubSpot.")
         self.token = token
-        self.verbose = verbose_logger
+        self.logger = logger
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {self.token}",
@@ -23,11 +25,11 @@ class HubSpot_API:
 
     def _log(self, message: str, level: str = "info"):
         """Método de logging interno."""
-        if self.verbose:
+        if self.logger:
             if level == "error":
-                self.verbose.error(message)
+                self.logger.error(message)
             else:
-                self.verbose.log(message)
+                self.logger.log(message)
         else:
             print(f"[{level.upper()}] {message}")
 
