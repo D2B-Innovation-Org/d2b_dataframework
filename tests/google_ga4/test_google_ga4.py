@@ -133,6 +133,28 @@ def test_get_report_429_backoff(ga4, mocker):
 
     assert mock_sleep.call_count == 5
 
+@pytest.mark.parametrize("status", [502, 504])
+def test_get_report_gateway_errors_backoff(ga4, mocker, status):
+    """Testing that 502/504 gateway errors are retried like 429"""
+
+    fake_resp = MagicMock()
+    fake_resp.status = status
+    http_error = HttpError(resp=fake_resp, content=b"Bad Gateway")
+    mock_execute = MagicMock(side_effect=http_error)
+    mock_batch = MagicMock(execute=mock_execute)
+    ga4.service.properties = MagicMock(
+        return_value=MagicMock(
+            batchRunReports=MagicMock(return_value=mock_batch)
+        )
+    )
+
+    mock_sleep = mocker.patch("time.sleep")
+
+    with pytest.raises(HttpError):
+        ga4._get_report_raw("properties/123", {"requests": [{}]})
+
+    assert mock_sleep.call_count == 5
+
 def test_get_single_report_no_sampling_returns_no_sampling_cols(ga4, df_fake):
     """Tesing that the class handles sampling data, no sampling data and an empty response with sampling data"""
     

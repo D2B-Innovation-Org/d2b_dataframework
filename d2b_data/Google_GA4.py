@@ -161,7 +161,7 @@ class Google_GA4:
             except HttpError as e:
                 status_code = e.resp.status
                 reason = e._get_reason()
-                if status_code in [429, 500, 503]:
+                if status_code in [429, 500, 502, 503, 504]:
                     if retry_count >= max_retries:
                         self.debug(
                             f" Error {status_code} ({reason}): max retries {max_retries} exceeded."
