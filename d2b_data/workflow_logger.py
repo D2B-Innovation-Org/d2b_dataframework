@@ -61,16 +61,17 @@ class WorkflowLogger:
         self.alerts_enabled = alerts_enabled
         self.webhook_url = webhook_url
 
-        self.logger = logging.getLogger(workflow_name)
+        # Logger privado, fuera del registro global de logging. Con
+        # getLogger(name) todas las instancias con el mismo nombre compartían
+        # un único objeto, y en Cloud Run (instancias tibias) un request
+        # heredaba el nombre que set_workflow_name dejó el request anterior.
+        self.logger = logging.Logger(workflow_name)
         self.logger.setLevel(level)
         self.logger.propagate = False
 
         self._configure_console_handler(level)
 
     def _configure_console_handler(self, level: int) -> None:
-        if self.logger.handlers:
-            return
-
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
 
@@ -83,12 +84,13 @@ class WorkflowLogger:
         self.logger.addHandler(console_handler)
 
     def set_workflow_name(self, workflow_name: str) -> None:
-        """
-        Setter function used to change the name of the workflow during execution
-        Args: A string with the workflow name.
+        """Cambia el nombre del workflow durante la ejecución.
 
-        Return:
-            None.
+        Afecta solo a esta instancia: el logger es privado, así que otros
+        WorkflowLogger con el mismo nombre inicial no ven el cambio.
+
+        Args:
+            workflow_name: Nuevo nombre, usado en los logs y en las alertas.
         """
         self.workflow_name = workflow_name
         self.logger.name = workflow_name

@@ -27,16 +27,6 @@ def capture(wf, caplog):
         wf.logger.removeHandler(caplog.handler)
 
 
-@pytest.fixture(autouse=True)
-def clean_loggers():
-    """WorkflowLogger reuses logging.getLogger(name); reset between tests."""
-    yield
-    for name in list(logging.Logger.manager.loggerDict):
-        if name.startswith("wf-"):
-            logger = logging.getLogger(name)
-            logger.handlers.clear()
-
-
 def build(name="wf-test", **kwargs):
     return WorkflowLogger(workflow_name=name, **kwargs)
 
@@ -133,6 +123,48 @@ def test_set_workflow_name_updates_both_names():
     wf.set_workflow_name("wf-new")
     assert wf.workflow_name == "wf-new"
     assert wf.logger.name == "wf-new"
+
+
+# --------------------------------------------------------------------- #
+# Aislamiento entre instancias (instancias tibias de Cloud Run)
+# --------------------------------------------------------------------- #
+class TestInstanceIsolation:
+    """Each WorkflowLogger owns its logger; nothing leaks between requests."""
+
+    def test_same_name_gives_distinct_loggers(self) -> None:
+        """Two instances with the same name do not share the logging.Logger."""
+        first, second = build("wf-iso"), build("wf-iso")
+        assert first.logger is not second.logger
+
+    def test_rename_does_not_leak_to_next_instance(self) -> None:
+        """A rename in one request is not inherited by the next one."""
+        previous_request = build("el-test")
+        previous_request.set_workflow_name("D2B - Tanner")
+
+        next_request = build("el-test")
+
+        assert next_request.workflow_name == "el-test"
+        assert next_request.logger.name == "el-test"
+
+    def test_level_does_not_leak_between_instances(self) -> None:
+        """A DEBUG instance does not change the level of another one."""
+        quiet = build("wf-iso-level", level=logging.INFO)
+        build("wf-iso-level", level=logging.DEBUG)
+        assert quiet.logger.level == logging.INFO
+
+    def test_logger_is_not_in_global_registry(self) -> None:
+        """The private logger is not reachable through logging.getLogger."""
+        wf = build("wf-iso-registry")
+        assert logging.getLogger("wf-iso-registry") is not wf.logger
+
+    def test_records_carry_their_own_name(self, caplog) -> None:
+        """Log lines use the name of their own instance, not a renamed one."""
+        renamed = build("wf-iso-rec")
+        renamed.set_workflow_name("otro-cliente")
+        wf = build("wf-iso-rec")
+        with capture(wf, caplog):
+            wf.info("hola")
+        assert caplog.records[-1].name == "wf-iso-rec"
 
 
 # --------------------------------------------------------------------- #
