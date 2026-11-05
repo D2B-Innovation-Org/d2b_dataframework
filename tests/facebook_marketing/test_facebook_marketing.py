@@ -516,11 +516,11 @@ class TestGetAdsCreatives:
         assert video["ad_id"] == "111"
         assert video["creative_id"] == "c111"
         assert video["video_id"] == "v111"
-        assert video["image_url"] is None
+        assert pd.isna(video["image_url"])
         assert video["account_id"] == "123456789"
         image = df.iloc[1]
         assert image["image_hash"] == "abc123"
-        assert image["video_id"] is None
+        assert pd.isna(image["video_id"])
 
     def test_ad_without_creative_keeps_row(self, fb, mock_ad_account) -> None:
         """An ad with no creative produces a row with empty creative fields."""
@@ -531,7 +531,7 @@ class TestGetAdsCreatives:
 
         assert len(df) == 1
         assert df.iloc[0]["ad_id"] == "333"
-        assert df.iloc[0]["creative_id"] is None
+        assert pd.isna(df.iloc[0]["creative_id"])
 
     def test_account_without_ads_returns_empty_with_columns(
         self, fb, mock_ad_account

@@ -300,7 +300,7 @@ def test_get_posts_columns(linkedin, mocker):
     df = linkedin.get_posts(ORG, "2026-10-01", "2026-10-01")
     assert df["content_type"].tolist() == ["ARTICLE", "NONE", "MULTIIMAGE"]
     assert df.loc[1, "reshare_parent"] == "urn:li:share:0"
-    assert df.loc[1, "content_json"] is None
+    assert pd.isna(df.loc[1, "content_json"])
     assert "d2b.cl" in df.loc[0, "content_json"]
     assert df.loc[0, "created_at"] == pd.Timestamp("2026-10-01", tz="UTC")
     assert (df["org_id"] == ORG).all()
