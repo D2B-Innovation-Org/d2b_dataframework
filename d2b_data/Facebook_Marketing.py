@@ -1,5 +1,6 @@
 import time
 import warnings
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -321,6 +322,7 @@ class Facebook_Marketing:
         thumbnail_size: int = 400,
         effective_status: list[str] | None = None,
         page_size: int = 500,
+        updated_since: datetime | None = None,
     ) -> pd.DataFrame:
         """Lista los anuncios de una cuenta con las URLs de imagen de su creative.
 
@@ -338,6 +340,10 @@ class Facebook_Marketing:
                 ['ACTIVE', 'PAUSED', 'ARCHIVED']. Si es None se usa el filtro por
                 defecto de Meta, que deja fuera los anuncios archivados y eliminados.
             page_size: Anuncios por página. Por defecto 500.
+            updated_since: Si se indica, solo trae los anuncios modificados después
+                de ese momento (filtro de Meta por updated_time). Sirve para cargas
+                incrementales. Un datetime sin zona horaria se interpreta como UTC.
+                Por defecto None, que trae todos.
 
         Returns:
             DataFrame con una fila por anuncio y las columnas de CREATIVE_COLUMNS.
@@ -346,6 +352,7 @@ class Facebook_Marketing:
 
         Raises:
             ValueError: Si thumbnail_size no es un entero positivo.
+            TypeError: Si updated_since no es None ni un datetime.
             FacebookRequestError: Si Meta rechaza la consulta.
         """
         # Solo None cae a la cuenta del constructor: una lista vacía significa
@@ -361,10 +368,20 @@ class Facebook_Marketing:
             raise ValueError(
                 f"thumbnail_size debe ser un entero positivo, llegó {thumbnail_size!r}"
             )
+        if updated_since is not None and not isinstance(updated_since, datetime):
+            raise TypeError(
+                f"updated_since debe ser un datetime o None, llegó {updated_since!r}"
+            )
 
         if isinstance(id_account, list):
             frames = [
-                self.get_ads_creatives(acc, thumbnail_size, effective_status, page_size)
+                self.get_ads_creatives(
+                    acc,
+                    thumbnail_size,
+                    effective_status,
+                    page_size,
+                    updated_since=updated_since,
+                )
                 for acc in id_account
             ]
             if not frames:
@@ -381,6 +398,17 @@ class Facebook_Marketing:
         params = {"limit": page_size}
         if effective_status:
             params["effective_status"] = list(effective_status)
+        if updated_since is not None:
+            if updated_since.tzinfo is None:
+                updated_since = updated_since.replace(tzinfo=timezone.utc)
+            # Meta espera el filtro de updated_time como timestamp unix en segundos.
+            params["filtering"] = [
+                {
+                    "field": "updated_time",
+                    "operator": "GREATER_THAN",
+                    "value": int(updated_since.timestamp()),
+                }
+            ]
 
         self.logger.log(f"get_ads_creatives | act_{account_id} | inicio")
         ad_account = AdAccount(f"act_{account_id}", api=self.service)
