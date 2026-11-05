@@ -450,3 +450,238 @@ def test_unique_actions_ignores_non_list_columns(fb):
     df = pd.DataFrame({"spend": ["10", "20"], "clicks": ["5", "8"]})
     result = fb._unique_actions(df)
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# get_ads_creatives
+# ---------------------------------------------------------------------------
+
+
+def _make_ad(data):
+    ad = MagicMock()
+    ad.export_all_data.return_value = data
+    return ad
+
+
+VIDEO_AD = {
+    "id": "111",
+    "name": "Video ad",
+    "effective_status": "ACTIVE",
+    "updated_time": "2026-11-01T10:00:00-0300",
+    "creative": {
+        "id": "c111",
+        "object_type": "VIDEO",
+        "thumbnail_url": "https://scontent.fbcdn.net/v.jpg?oe=6AF22B6A",
+        "video_id": "v111",
+    },
+}
+IMAGE_AD = {
+    "id": "222",
+    "name": "Image ad",
+    "effective_status": "PAUSED",
+    "updated_time": "2026-10-01T10:00:00-0300",
+    "creative": {
+        "id": "c222",
+        "object_type": "SHARE",
+        "thumbnail_url": "https://scontent.fbcdn.net/t.jpg",
+        "image_url": "https://scontent.fbcdn.net/i.jpg",
+        "image_hash": "abc123",
+    },
+}
+
+
+@pytest.fixture
+def mock_ad_account(mocker):
+    account = MagicMock()
+    mocker.patch("d2b_data.Facebook_Marketing.AdAccount", return_value=account)
+    return account
+
+
+class TestGetAdsCreatives:
+    """Tests for Facebook_Marketing.get_ads_creatives."""
+
+    def test_returns_one_row_per_ad(self, fb, mock_ad_account) -> None:
+        """Video and image ads map to rows with their creative fields."""
+        from d2b_data.Facebook_Marketing import CREATIVE_COLUMNS
+
+        mock_ad_account.get_ads.return_value = [
+            _make_ad(VIDEO_AD),
+            _make_ad(IMAGE_AD),
+        ]
+        df = fb.get_ads_creatives()
+
+        assert list(df.columns) == CREATIVE_COLUMNS
+        assert len(df) == 2
+        video = df.iloc[0]
+        assert video["ad_id"] == "111"
+        assert video["creative_id"] == "c111"
+        assert video["video_id"] == "v111"
+        assert video["image_url"] is None
+        assert video["account_id"] == "123456789"
+        image = df.iloc[1]
+        assert image["image_hash"] == "abc123"
+        assert image["video_id"] is None
+
+    def test_ad_without_creative_keeps_row(self, fb, mock_ad_account) -> None:
+        """An ad with no creative produces a row with empty creative fields."""
+        mock_ad_account.get_ads.return_value = [
+            _make_ad({"id": "333", "name": "Sin creative"})
+        ]
+        df = fb.get_ads_creatives()
+
+        assert len(df) == 1
+        assert df.iloc[0]["ad_id"] == "333"
+        assert df.iloc[0]["creative_id"] is None
+
+    def test_account_without_ads_returns_empty_with_columns(
+        self, fb, mock_ad_account
+    ) -> None:
+        """No ads yields an empty DataFrame that still has every column."""
+        from d2b_data.Facebook_Marketing import CREATIVE_COLUMNS
+
+        mock_ad_account.get_ads.return_value = []
+        df = fb.get_ads_creatives()
+
+        assert df.empty
+        assert list(df.columns) == CREATIVE_COLUMNS
+
+    def test_list_of_accounts_concatenates(self, fb, mock_ad_account) -> None:
+        """Each account is queried and the results are concatenated."""
+        mock_ad_account.get_ads.side_effect = [
+            [_make_ad(VIDEO_AD)],
+            [_make_ad(IMAGE_AD)],
+        ]
+        df = fb.get_ads_creatives(["1", "2"])
+
+        assert list(df["account_id"]) == ["1", "2"]
+        assert mock_ad_account.get_ads.call_count == 2
+
+    def test_empty_account_list_returns_empty(self, fb, mock_ad_account) -> None:
+        """An empty account list returns an empty DataFrame without API calls."""
+        df = fb.get_ads_creatives([])
+
+        assert df.empty
+        mock_ad_account.get_ads.assert_not_called()
+
+    def test_requests_thumbnail_size_and_page_size(self, fb, mock_ad_account) -> None:
+        """The creative field carries the thumbnail size and limit is 500."""
+        mock_ad_account.get_ads.return_value = []
+        fb.get_ads_creatives(thumbnail_size=300)
+
+        kwargs = mock_ad_account.get_ads.call_args.kwargs
+        creative_field = kwargs["fields"][-1]
+        assert creative_field.startswith(
+            "creative.thumbnail_width(300).thumbnail_height(300){"
+        )
+        assert "thumbnail_url" in creative_field
+        assert kwargs["params"] == {"limit": 500}
+
+    def test_effective_status_filter_sent_only_when_given(
+        self, fb, mock_ad_account
+    ) -> None:
+        """effective_status is added to params only when the caller passes it."""
+        mock_ad_account.get_ads.return_value = []
+        fb.get_ads_creatives(effective_status=["ACTIVE", "ARCHIVED"])
+
+        params = mock_ad_account.get_ads.call_args.kwargs["params"]
+        assert params["effective_status"] == ["ACTIVE", "ARCHIVED"]
+
+    @pytest.mark.parametrize("size", [0, -1, "400", 4.5, True, None])
+    def test_invalid_thumbnail_size_raises(self, fb, mock_ad_account, size) -> None:
+        """Non-positive or non-integer sizes raise ValueError before any call."""
+        with pytest.raises(ValueError, match="thumbnail_size"):
+            fb.get_ads_creatives(thumbnail_size=size)
+        mock_ad_account.get_ads.assert_not_called()
+
+    def test_api_error_propagates(self, fb, mock_ad_account) -> None:
+        """Errors from Meta are not swallowed, the caller decides what to do."""
+        mock_ad_account.get_ads.side_effect = RuntimeError("meta down")
+        with pytest.raises(RuntimeError, match="meta down"):
+            fb.get_ads_creatives()
+
+
+def _meta_error(message, code=1, status=500):
+    import json
+
+    from facebook_business.exceptions import FacebookRequestError
+
+    body = json.dumps({"error": {"message": message, "code": code}})
+    return FacebookRequestError("Call was not successful", {}, status, {}, body)
+
+
+TOO_MUCH_DATA = "Please reduce the amount of data you're asking for, then retry"
+
+
+class _FlakyCursor:
+    """Cursor that raises once after yielding the first page, like the SDK."""
+
+    def __init__(self, first_page, second_page, error):
+        self.params = {"limit": 500, "after": "page2"}
+        self._pages = [list(first_page), error, list(second_page)]
+        self._queue = []
+        self.limits_requested = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self._queue:
+            if not self._pages:
+                raise StopIteration()
+            page = self._pages.pop(0)
+            self.limits_requested.append(self.params["limit"])
+            if isinstance(page, Exception):
+                raise page
+            self._queue = page
+        return self._queue.pop(0)
+
+
+class TestGetAdsCreativesPageShrink:
+    """Tests for the adaptive page size of get_ads_creatives."""
+
+    def test_first_page_too_big_retries_with_half_limit(
+        self, fb, mock_ad_account
+    ) -> None:
+        """A size error on the first page retries get_ads with limit halved."""
+        mock_ad_account.get_ads.side_effect = [
+            _meta_error(TOO_MUCH_DATA),
+            [_make_ad(VIDEO_AD)],
+        ]
+        df = fb.get_ads_creatives()
+
+        assert len(df) == 1
+        calls = mock_ad_account.get_ads.call_args_list
+        assert [c.kwargs["params"]["limit"] for c in calls] == [500, 250]
+
+    def test_later_page_too_big_keeps_rows_and_resumes(
+        self, fb, mock_ad_account
+    ) -> None:
+        """A size error mid-pagination halves the cursor limit and keeps prior rows."""
+        cursor = _FlakyCursor(
+            [_make_ad(VIDEO_AD)], [_make_ad(IMAGE_AD)], _meta_error(TOO_MUCH_DATA)
+        )
+        mock_ad_account.get_ads.return_value = cursor
+        df = fb.get_ads_creatives()
+
+        assert list(df["ad_id"]) == ["111", "222"]
+        assert cursor.params == {"limit": 250, "after": "page2"}
+        assert cursor.limits_requested == [500, 500, 250]
+
+    def test_other_meta_error_is_not_retried(self, fb, mock_ad_account) -> None:
+        """Errors that are not about response size propagate immediately."""
+        from facebook_business.exceptions import FacebookRequestError
+
+        mock_ad_account.get_ads.side_effect = _meta_error("Invalid parameter", 100, 400)
+        with pytest.raises(FacebookRequestError):
+            fb.get_ads_creatives()
+        assert mock_ad_account.get_ads.call_count == 1
+
+    def test_gives_up_at_minimum_page_size(self, fb, mock_ad_account) -> None:
+        """If even the minimum page is too big, the error propagates."""
+        from facebook_business.exceptions import FacebookRequestError
+
+        mock_ad_account.get_ads.side_effect = _meta_error(TOO_MUCH_DATA)
+        with pytest.raises(FacebookRequestError):
+            fb.get_ads_creatives(page_size=100)
+        # 100 -> 50 -> 25 y a 25 ya no se achica más.
+        assert mock_ad_account.get_ads.call_count == 3

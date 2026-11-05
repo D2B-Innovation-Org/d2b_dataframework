@@ -1,4 +1,5 @@
 import time
+import warnings
 from urllib.parse import urlsplit
 
 import pandas as pd
@@ -6,6 +7,32 @@ from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.api import FacebookAdsApi
 from facebook_business.exceptions import FacebookRequestError
 from d2b_data.workflow_logger import resolve_logger
+
+# Columnas de get_ads_creatives, en orden. Se usan también para el DataFrame vacío
+# y así el esquema de la tabla de destino no depende de si la cuenta tiene anuncios.
+CREATIVE_COLUMNS = [
+    "account_id",
+    "ad_id",
+    "ad_name",
+    "effective_status",
+    "updated_time",
+    "creative_id",
+    "object_type",
+    "thumbnail_url",
+    "image_url",
+    "image_hash",
+    "video_id",
+]
+# Piso al achicar la página cuando Meta responde que la respuesta es muy grande.
+MIN_ADS_PAGE_SIZE = 25
+CREATIVE_FIELDS = [
+    "id",
+    "object_type",
+    "thumbnail_url",
+    "image_url",
+    "image_hash",
+    "video_id",
+]
 
 
 class Facebook_Marketing:
@@ -287,6 +314,157 @@ class Facebook_Marketing:
             df = self.get_report_dataframe(params, acc)
             array_df.append(df)
         return pd.concat(array_df, ignore_index=True)
+
+    def get_ads_creatives(
+        self,
+        id_account: str | int | list | None = None,
+        thumbnail_size: int = 400,
+        effective_status: list[str] | None = None,
+        page_size: int = 500,
+    ) -> pd.DataFrame:
+        """Lista los anuncios de una cuenta con las URLs de imagen de su creative.
+
+        Insights no devuelve las imágenes de los anuncios, por eso es una consulta
+        aparte al edge /act_{id}/ads. No usa el límite de Ads Insights. Las URLs que
+        entrega Meta son temporales (vencen en uno a cinco días), así que quien las
+        consuma debe descargar la imagen y no guardar la URL.
+
+        Args:
+            id_account: ID de la cuenta sin el prefijo 'act_', o una lista de IDs.
+                Si es None se usa la cuenta del constructor.
+            thumbnail_size: Lado en píxeles del thumbnail cuadrado. Meta entrega
+                64x64 si no se indica. Por defecto 400.
+            effective_status: Estados de anuncio a incluir, por ejemplo
+                ['ACTIVE', 'PAUSED', 'ARCHIVED']. Si es None se usa el filtro por
+                defecto de Meta, que deja fuera los anuncios archivados y eliminados.
+            page_size: Anuncios por página. Por defecto 500.
+
+        Returns:
+            DataFrame con una fila por anuncio y las columnas de CREATIVE_COLUMNS.
+            Los campos que Meta no informa para un anuncio quedan en None (por
+            ejemplo image_url en anuncios de video).
+
+        Raises:
+            ValueError: Si thumbnail_size no es un entero positivo.
+            FacebookRequestError: Si Meta rechaza la consulta.
+        """
+        # Solo None cae a la cuenta del constructor: una lista vacía significa
+        # "ninguna cuenta", no "la cuenta por defecto".
+        if id_account is None:
+            id_account = self.id_account
+        is_valid_size = (
+            isinstance(thumbnail_size, int)
+            and not isinstance(thumbnail_size, bool)
+            and thumbnail_size > 0
+        )
+        if not is_valid_size:
+            raise ValueError(
+                f"thumbnail_size debe ser un entero positivo, llegó {thumbnail_size!r}"
+            )
+
+        if isinstance(id_account, list):
+            frames = [
+                self.get_ads_creatives(acc, thumbnail_size, effective_status, page_size)
+                for acc in id_account
+            ]
+            if not frames:
+                return pd.DataFrame(columns=CREATIVE_COLUMNS)
+            return pd.concat(frames, ignore_index=True)
+
+        account_id = str(id_account)
+        creative_field = (
+            f"creative.thumbnail_width({thumbnail_size})"
+            f".thumbnail_height({thumbnail_size})"
+            "{" + ",".join(CREATIVE_FIELDS) + "}"
+        )
+        fields = ["id", "name", "effective_status", "updated_time", creative_field]
+        params = {"limit": page_size}
+        if effective_status:
+            params["effective_status"] = list(effective_status)
+
+        self.logger.log(f"get_ads_creatives | act_{account_id} | inicio")
+        ad_account = AdAccount(f"act_{account_id}", api=self.service)
+
+        # get_ads ya descarga la primera página, así que también puede fallar por
+        # tamaño de respuesta antes de que exista el cursor.
+        while True:
+            try:
+                ads = self._get_ads_cursor(ad_account, fields, params)
+                break
+            except FacebookRequestError as error:
+                self._shrink_page_or_raise(error, params, account_id)
+
+        rows = []
+        # Si una página falla por tamaño, el cursor conserva su 'after': se reintenta
+        # esa misma página con menos anuncios y no se pierde lo ya descargado.
+        while True:
+            try:
+                for ad in ads:
+                    rows.append(self._creative_row(ad, account_id))
+                break
+            except FacebookRequestError as error:
+                self._shrink_page_or_raise(error, ads.params, account_id)
+
+        self.logger.log(f"get_ads_creatives | act_{account_id} | {len(rows)} anuncios")
+        return pd.DataFrame(rows, columns=CREATIVE_COLUMNS)
+
+    def _get_ads_cursor(self, ad_account, fields: list[str], params: dict):
+        """Pide el edge de anuncios sin el UserWarning falso del SDK.
+
+        El SDK valida los campos contra una lista fija y no reconoce la expansión
+        anidada del creative, aunque la Graph API sí la acepta.
+        """
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="ads does not allow field")
+            return ad_account.get_ads(fields=fields, params=dict(params))
+
+    def _shrink_page_or_raise(
+        self, error: FacebookRequestError, params: dict, account_id: str
+    ) -> None:
+        """Divide a la mitad el 'limit' de params si Meta pidió menos datos.
+
+        Meta responde código 1 "Please reduce the amount of data" cuando una página
+        con el creative expandido pesa demasiado (pasa en cuentas grandes con 500
+        anuncios por página).
+
+        Args:
+            error: Error devuelto por Meta.
+            params: Parámetros de la consulta; se modifica 'limit' en el lugar.
+            account_id: Cuenta, solo para el log.
+
+        Raises:
+            FacebookRequestError: El mismo error, si no es por tamaño o si el
+                'limit' ya está en el mínimo.
+        """
+        message = error.api_error_message() or ""
+        is_too_much_data = "reduce the amount of data" in message
+        limit = params.get("limit", MIN_ADS_PAGE_SIZE)
+        if not is_too_much_data or limit <= MIN_ADS_PAGE_SIZE:
+            raise error
+        params["limit"] = max(MIN_ADS_PAGE_SIZE, limit // 2)
+        self.logger.log(
+            f"get_ads_creatives | act_{account_id} | respuesta muy grande, "
+            f"limit {limit} -> {params['limit']}"
+        )
+
+    @staticmethod
+    def _creative_row(ad, account_id: str) -> dict:
+        """Aplana un anuncio del SDK a una fila con las columnas de CREATIVE_COLUMNS."""
+        data = ad.export_all_data() if hasattr(ad, "export_all_data") else ad
+        creative = data.get("creative") or {}
+        return {
+            "account_id": account_id,
+            "ad_id": data.get("id"),
+            "ad_name": data.get("name"),
+            "effective_status": data.get("effective_status"),
+            "updated_time": data.get("updated_time"),
+            "creative_id": creative.get("id"),
+            "object_type": creative.get("object_type"),
+            "thumbnail_url": creative.get("thumbnail_url"),
+            "image_url": creative.get("image_url"),
+            "image_hash": creative.get("image_hash"),
+            "video_id": creative.get("video_id"),
+        }
 
     def _unique_actions(self, df):
         self.logger.log("_unique_actions")
