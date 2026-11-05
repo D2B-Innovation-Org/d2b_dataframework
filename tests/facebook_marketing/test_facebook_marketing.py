@@ -685,3 +685,78 @@ class TestGetAdsCreativesPageShrink:
             fb.get_ads_creatives(page_size=100)
         # 100 -> 50 -> 25 y a 25 ya no se achica más.
         assert mock_ad_account.get_ads.call_count == 3
+
+
+class TestGetAdsCreativesUpdatedSince:
+    """Tests for the incremental updated_since filter of get_ads_creatives."""
+
+    def test_no_filter_by_default(self, fb, mock_ad_account) -> None:
+        """Without updated_since no filtering is sent, so every ad comes back."""
+        mock_ad_account.get_ads.return_value = []
+        fb.get_ads_creatives()
+
+        params = mock_ad_account.get_ads.call_args.kwargs["params"]
+        assert "filtering" not in params
+
+    def test_aware_datetime_becomes_unix_filter(self, fb, mock_ad_account) -> None:
+        """An aware datetime is sent as a GREATER_THAN unix timestamp."""
+        from datetime import datetime, timedelta, timezone
+
+        mock_ad_account.get_ads.return_value = []
+        santiago = timezone(timedelta(hours=-3))
+        fb.get_ads_creatives(updated_since=datetime(2026, 11, 5, 9, 0, tzinfo=santiago))
+
+        params = mock_ad_account.get_ads.call_args.kwargs["params"]
+        assert params["filtering"] == [
+            {
+                "field": "updated_time",
+                "operator": "GREATER_THAN",
+                "value": 1793880000,  # 2026-11-05 12:00 UTC
+            }
+        ]
+
+    def test_naive_datetime_is_treated_as_utc(self, fb, mock_ad_account) -> None:
+        """A naive datetime is read as UTC, not as the machine's local time."""
+        from datetime import datetime
+
+        mock_ad_account.get_ads.return_value = []
+        fb.get_ads_creatives(updated_since=datetime(2026, 11, 5, 12, 0))
+
+        params = mock_ad_account.get_ads.call_args.kwargs["params"]
+        assert params["filtering"][0]["value"] == 1793880000
+
+    def test_filter_applies_to_every_account_in_list(
+        self, fb, mock_ad_account
+    ) -> None:
+        """With a list of accounts, each call carries the same filter."""
+        from datetime import datetime, timezone
+
+        mock_ad_account.get_ads.return_value = []
+        since = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
+        fb.get_ads_creatives(["1", "2"], updated_since=since)
+
+        calls = mock_ad_account.get_ads.call_args_list
+        assert len(calls) == 2
+        for call in calls:
+            assert call.kwargs["params"]["filtering"][0]["value"] == 1793880000
+
+    def test_filter_combines_with_effective_status(self, fb, mock_ad_account) -> None:
+        """updated_since and effective_status can be used together."""
+        from datetime import datetime, timezone
+
+        mock_ad_account.get_ads.return_value = []
+        fb.get_ads_creatives(
+            effective_status=["ACTIVE"],
+            updated_since=datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc),
+        )
+
+        params = mock_ad_account.get_ads.call_args.kwargs["params"]
+        assert params["effective_status"] == ["ACTIVE"]
+        assert params["filtering"][0]["field"] == "updated_time"
+
+    @pytest.mark.parametrize("value", ["2026-11-05", 1793880000, "ayer"])
+    def test_non_datetime_raises(self, fb, mock_ad_account, value) -> None:
+        """Strings or raw timestamps are rejected before calling Meta."""
+        with pytest.raises(TypeError, match="updated_since"):
+            fb.get_ads_creatives(updated_since=value)
+        mock_ad_account.get_ads.assert_not_called()
