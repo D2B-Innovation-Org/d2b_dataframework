@@ -600,12 +600,15 @@ class TestGetAdsCreatives:
             fb.get_ads_creatives()
 
 
-def _meta_error(message, code=1, status=500):
+def _meta_error(message, code=1, status=500, subcode=None):
     import json
 
     from facebook_business.exceptions import FacebookRequestError
 
-    body = json.dumps({"error": {"message": message, "code": code}})
+    error = {"message": message, "code": code}
+    if subcode is not None:
+        error["error_subcode"] = subcode
+    body = json.dumps({"error": error})
     return FacebookRequestError("Call was not successful", {}, status, {}, body)
 
 
@@ -666,6 +669,33 @@ class TestGetAdsCreativesPageShrink:
         assert list(df["ad_id"]) == ["111", "222"]
         assert cursor.params == {"limit": 250, "after": "page2"}
         assert cursor.limits_requested == [500, 500, 250]
+
+    def test_meta_timeout_subcode_99_retries_with_half_limit(
+        self, fb, mock_ad_account
+    ) -> None:
+        """Code 1 subcode 99 ("unknown error", Meta's timeout) also shrinks the page."""
+        mock_ad_account.get_ads.side_effect = [
+            _meta_error("An unknown error occurred", 1, 500, subcode=99),
+            [_make_ad(VIDEO_AD)],
+        ]
+        df = fb.get_ads_creatives()
+
+        assert len(df) == 1
+        calls = mock_ad_account.get_ads.call_args_list
+        assert [c.kwargs["params"]["limit"] for c in calls] == [500, 250]
+
+    def test_code_1_without_subcode_99_is_not_retried(
+        self, fb, mock_ad_account
+    ) -> None:
+        """A generic code 1 with another subcode is not treated as a size error."""
+        from facebook_business.exceptions import FacebookRequestError
+
+        mock_ad_account.get_ads.side_effect = _meta_error(
+            "An unknown error occurred", 1, 500, subcode=1
+        )
+        with pytest.raises(FacebookRequestError):
+            fb.get_ads_creatives()
+        assert mock_ad_account.get_ads.call_count == 1
 
     def test_other_meta_error_is_not_retried(self, fb, mock_ad_account) -> None:
         """Errors that are not about response size propagate immediately."""
