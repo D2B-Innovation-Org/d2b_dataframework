@@ -1,11 +1,26 @@
+"""Logger legado de consola.
+
+Verbose ya no envía alertas: solo imprime. Las alertas por webhook viven en
+WorkflowLogger (d2b_data.workflow_logger), que recibe la URL desde Secret
+Manager. Los flujos que necesiten alertas deben migrar a WorkflowLogger.
+"""
+
 from datetime import datetime
+
 
 class Verbose:
     def __init__(self, active=True, alerts_enabled=True, workflow_name="UnknownWorkflow"):
+        """Crea el logger.
+
+        Args:
+            active: Si es False no imprime nada.
+            alerts_enabled: Se mantiene para no romper a quienes lo pasan; ya no
+                tiene efecto porque Verbose no envía alertas.
+            workflow_name: Prefijo de los mensajes de critical().
+        """
         self.active = active
         self.alerts_enabled = alerts_enabled
-        self.workflow_name = workflow_name  
-        self.bot_url = "https://us-central1-d2b-data-management.cloudfunctions.net/innovation-messenger-hangout"
+        self.workflow_name = workflow_name
 
     def log(self, msg):
         if self.active:
@@ -13,28 +28,16 @@ class Verbose:
             print(f"[{timestamp}]: {msg}")
 
     def critical(self, msg, current_workflow_name=None):
+        """Imprime un error crítico. No envía alertas; para eso usar WorkflowLogger."""
         name_to_use = current_workflow_name or self.workflow_name or "UnknownWorkflow"
-        
-        full_msg = f"[{name_to_use}] {msg}" # Mensaje para alerta y consola (sin 'e' ni 'exc_info')
         if self.active:
-            print(f"CRITICAL: {full_msg}")
-        if self.alerts_enabled:
-            try:
-                import requests 
-                payload = {"message": full_msg} 
-                response = requests.post(self.bot_url, json=payload, timeout=15)
-                log_prefix_alert_status = f"[{name_to_use} via Verbose.critical]"
-                if response.status_code >= 200 and response.status_code < 300:
-                    if self.active: print(f"{log_prefix_alert_status} Critical alert sent successfully.")
-                else:
-                    if self.active: print(f"{log_prefix_alert_status} Failed to send critical alert. Status: {response.status_code}, Response: {response.text}")
-            except Exception as alert_exception:
-                if self.active: print(f"ERROR: [{name_to_use} via Verbose.critical] Exception sending critical alert: {alert_exception}")
+            print(f"CRITICAL: [{name_to_use}] {msg}")
 
     def set_workflow_name(self, name):
         self.workflow_name = name
 
+
 # CONFIGURACIÓN GLOBAL
 VERBOSE_ACTIVE = True
-ALERTS_ENABLED = True 
+ALERTS_ENABLED = True
 verbose_logger = Verbose(active=VERBOSE_ACTIVE, alerts_enabled=ALERTS_ENABLED)
