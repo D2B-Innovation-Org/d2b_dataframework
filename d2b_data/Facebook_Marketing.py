@@ -449,11 +449,13 @@ class Facebook_Marketing:
     def _shrink_page_or_raise(
         self, error: FacebookRequestError, params: dict, account_id: str
     ) -> None:
-        """Divide a la mitad el 'limit' de params si Meta pidió menos datos.
+        """Divide a la mitad el 'limit' de params si la página es muy pesada.
 
-        Meta responde código 1 "Please reduce the amount of data" cuando una página
-        con el creative expandido pesa demasiado (pasa en cuentas grandes con 500
-        anuncios por página).
+        Meta tiene dos formas de rechazar una página con el creative expandido que
+        pesa demasiado (pasa en cuentas grandes con 500 anuncios por página):
+        código 1 "Please reduce the amount of data", o código 1 subcódigo 99
+        "An unknown error occurred" (HTTP 500), que es su timeout interno y
+        aparece de forma intermitente tras unos 30 segundos.
 
         Args:
             error: Error devuelto por Meta.
@@ -466,12 +468,16 @@ class Facebook_Marketing:
         """
         message = error.api_error_message() or ""
         is_too_much_data = "reduce the amount of data" in message
+        is_meta_timeout = (
+            error.api_error_code() == 1 and error.api_error_subcode() == 99
+        )
         limit = params.get("limit", MIN_ADS_PAGE_SIZE)
-        if not is_too_much_data or limit <= MIN_ADS_PAGE_SIZE:
+        if not (is_too_much_data or is_meta_timeout) or limit <= MIN_ADS_PAGE_SIZE:
             raise error
         params["limit"] = max(MIN_ADS_PAGE_SIZE, limit // 2)
         self.logger.log(
-            f"get_ads_creatives | act_{account_id} | respuesta muy grande, "
+            f"get_ads_creatives | act_{account_id} | respuesta muy grande "
+            f"(código {error.api_error_code()}/{error.api_error_subcode()}), "
             f"limit {limit} -> {params['limit']}"
         )
 
