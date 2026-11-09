@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
 
 
@@ -400,3 +401,114 @@ def test_get_report_json_with_data_returns_consolidated_dict(tiktok, mocker):
     assert "data" in result
     assert "list" in result["data"]
     assert len(result["data"]["list"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# get_ads
+# ---------------------------------------------------------------------------
+
+
+def _ads_page(ads, total_page=1):
+    return {"code": 0, "data": {"list": ads, "page_info": {"total_page": total_page}}}
+
+
+SPARK_AD = {
+    "ad_id": "1881408511878578",
+    "ad_name": "Post | Interacción",
+    "identity_type": "BC_AUTH_TT",
+    "identity_id": "76e0b818-0501-5a65-99d9-fd9428f7d840",
+    "tiktok_item_id": "7704796806240144647",
+    "video_id": None,
+}
+
+
+def test_get_raw_report_keeps_using_report_endpoint(tiktok, mocker):
+    """_get_report_raw still calls the integrated report endpoint."""
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"code": 0, "data": {"list": []}}
+    mock_get = mocker.patch(
+        "d2b_data.tiktok_marketing.requests.get", return_value=fake_response
+    )
+
+    tiktok._get_report_raw(params={})
+
+    assert mock_get.call_args.args[0].endswith("/report/integrated/get/")
+
+
+def test_get_ads_calls_ad_get_with_default_fields(tiktok, mocker):
+    """get_ads queries ad/get/ with AD_FIELDS as a JSON list."""
+    import json
+
+    from d2b_data.tiktok_marketing import AD_FIELDS
+
+    mock_raw = mocker.patch.object(tiktok, "_get_raw", return_value=_ads_page([]))
+
+    tiktok.get_ads("123")
+
+    endpoint, params = mock_raw.call_args.args
+    assert endpoint == "ad/get/"
+    assert params["advertiser_id"] == "123"
+    assert json.loads(params["fields"]) == AD_FIELDS
+    assert "filtering" not in params
+
+
+def test_get_ads_returns_raw_values(tiktok, mocker):
+    """Values come back exactly as TikTok sends them, one column per field."""
+    fields = list(SPARK_AD)
+    mocker.patch.object(tiktok, "_get_raw", return_value=_ads_page([SPARK_AD]))
+
+    df = tiktok.get_ads("123", fields=fields)
+
+    assert list(df.columns) == fields
+    row = df.iloc[0]
+    assert row["tiktok_item_id"] == "7704796806240144647"
+    assert row["identity_id"] == "76e0b818-0501-5a65-99d9-fd9428f7d840"
+    assert pd.isna(row["video_id"])
+
+
+def test_get_ads_paginates(tiktok, mocker):
+    """All pages are requested and concatenated."""
+    mock_raw = mocker.patch.object(
+        tiktok,
+        "_get_raw",
+        side_effect=[
+            _ads_page([{"ad_id": "1"}], total_page=2),
+            _ads_page([{"ad_id": "2"}], total_page=2),
+        ],
+    )
+
+    df = tiktok.get_ads("123", fields=["ad_id"])
+
+    assert list(df["ad_id"]) == ["1", "2"]
+    assert mock_raw.call_count == 2
+
+
+def test_get_ads_passes_filtering(tiktok, mocker):
+    """A filtering object is sent JSON-encoded."""
+    import json
+
+    mock_raw = mocker.patch.object(tiktok, "_get_raw", return_value=_ads_page([]))
+
+    tiktok.get_ads("123", filtering={"primary_status": "STATUS_ALL"})
+
+    params = mock_raw.call_args.args[1]
+    assert json.loads(params["filtering"]) == {"primary_status": "STATUS_ALL"}
+
+
+def test_get_ads_empty_keeps_columns(tiktok, mocker):
+    """No ads yields an empty DataFrame with the requested columns."""
+    mocker.patch.object(tiktok, "_get_raw", return_value=_ads_page([]))
+
+    df = tiktok.get_ads("123", fields=["ad_id", "tiktok_item_id"])
+
+    assert df.empty
+    assert list(df.columns) == ["ad_id", "tiktok_item_id"]
+
+
+def test_get_ads_raises_on_api_error(tiktok, mocker):
+    """A failed request raises instead of returning partial data."""
+    mocker.patch.object(tiktok, "_get_raw", return_value=None)
+
+    with pytest.raises(RuntimeError):
+        tiktok.get_ads("123")

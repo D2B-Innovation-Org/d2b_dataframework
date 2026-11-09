@@ -348,6 +348,11 @@ class LinkedinMarketing:
 
         return campaign_group_name_map
 
+    @staticmethod
+    def _pivot_id_column(pivot_name: str) -> str:
+        """Column that holds the ID of a pivot, e.g. CREATIVE -> creative_id."""
+        return f"{pivot_name.lower()}_id"
+
     def set_token(self, token_path: str) -> None:
         """Load an access token from a file and update the request headers."""
 
@@ -488,50 +493,43 @@ class LinkedinMarketing:
 
             self.logger.debug("Getting campaign name information")
 
-            campaign_names_ids = set()
-            campaign_group_names_ids = set()
+            df = pd.json_normalize(raw_data, sep="_")
 
-            for row in raw_data:
-                pivot_values = row.get("pivotValues")
+            self.logger.debug("Starting DataFrame transformation...")
 
-                if pivot_values:
-                    campaign_name_id = pivot_values[1].split(":")[3]
-                    campaign_group_id = pivot_values[0].split(":")[3]
-
-                    campaign_names_ids.add(campaign_name_id)
-                    campaign_group_names_ids.add(campaign_group_id)
+            # pivotValues trae una URN por pivot, en el mismo orden en que se
+            # pidieron. Cada una se guarda como columna <pivot>_id para no perder
+            # ninguna al eliminar pivotValues (que es una lista y BigQuery no la acepta).
+            for position, pivot_name in enumerate(pivot):
+                df[self._pivot_id_column(pivot_name)] = df["pivotValues"].apply(
+                    lambda values, i=position: values[i].split(":")[3]
+                )
 
             try:
-                campaign_name_map = self._get_campaign_names(
-                    campaign_names_ids, account_id
-                )
-                self.logger.debug(f"Campaign name maps: {campaign_name_map}")
-                campaign_group_name_map = self._get_adset_names(
-                    campaign_group_names_ids, account_id
-                )
-                self.logger.debug(f"Adset names maps: {campaign_group_name_map}")
+                campaign_group_name_map = {}
+                campaign_name_map = {}
+                if "CAMPAIGN_GROUP" in pivot:
+                    campaign_group_name_map = self._get_adset_names(
+                        set(df["campaign_group_id"]), account_id
+                    )
+                    self.logger.debug(f"Adset names maps: {campaign_group_name_map}")
+                if "CAMPAIGN" in pivot:
+                    campaign_name_map = self._get_campaign_names(
+                        set(df["campaign_id"]), account_id
+                    )
+                    self.logger.debug(f"Campaign name maps: {campaign_name_map}")
 
                 self.logger.debug("Campaign name and adset name information retrieved")
             except Exception as e:
                 self.logger.critical(f"Error during campaign name extraction: {e}")
                 raise
 
-            df = pd.json_normalize(raw_data, sep="_")
-
-            self.logger.debug("Starting DataFrame transformation...")
-
-            df["campaign_group_id"] = df["pivotValues"].apply(
-                lambda x: x[0].split(":")[3]
-            )
-            df["campaign_id"] = df["pivotValues"].apply(lambda x: x[1].split(":")[3])
-
-            df["ad_set_name"] = df["pivotValues"].apply(
-                lambda x: campaign_group_name_map.get(x[0].split(":")[3])
-            )
-
-            df["campaign_name"] = df["pivotValues"].apply(
-                lambda x: campaign_name_map.get(x[1].split(":")[3])
-            )
+            if "CAMPAIGN_GROUP" in pivot:
+                df["ad_set_name"] = df["campaign_group_id"].apply(
+                    campaign_group_name_map.get
+                )
+            if "CAMPAIGN" in pivot:
+                df["campaign_name"] = df["campaign_id"].apply(campaign_name_map.get)
 
             df["date"] = pd.to_datetime(
                 {

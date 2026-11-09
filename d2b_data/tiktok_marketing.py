@@ -10,6 +10,24 @@ import requests
 
 from d2b_data.verbose_logger import Verbose
 
+# Campos por defecto de get_ads. tiktok_item_id e identity_id identifican el post
+# de TikTok en los Spark Ads; el reporte de métricas no los entrega.
+AD_FIELDS = [
+    "advertiser_id",
+    "campaign_id",
+    "adgroup_id",
+    "ad_id",
+    "ad_name",
+    "operation_status",
+    "secondary_status",
+    "identity_type",
+    "identity_id",
+    "tiktok_item_id",
+    "video_id",
+    "create_time",
+    "modify_time",
+]
+
 
 class TikTokMarketing:
     """
@@ -124,7 +142,14 @@ class TikTokMarketing:
 
     def _get_report_raw(self, params: dict, max_retries: int = 5):
         """Low level internal API call handler"""
-        url = f"{self.endpoint_base}report/integrated/get/"
+        return self._get_raw("report/integrated/get/", params, max_retries)
+
+    def _get_raw(self, endpoint: str, params: dict, max_retries: int = 5):
+        """GET an endpoint under endpoint_base, with backoff on HTTP 429.
+
+        Returns the parsed JSON when TikTok answers code 0, otherwise None.
+        """
+        url = f"{self.endpoint_base}{endpoint}"
         for attempt in range(max_retries):
             try:
                 response = requests.get(url, headers=self.headers, params=params)
@@ -259,6 +284,61 @@ class TikTokMarketing:
         if data.get("code") == 0:
             return data.get("data", {}).get("list", [])
         return []
+
+    def get_ads(
+        self,
+        advertiser_id: str,
+        fields: list[str] | None = None,
+        filtering: dict | None = None,
+        page_size: int = 1000,
+    ) -> pd.DataFrame:
+        """Lists the ads of an advertiser with their attributes, as returned by TikTok.
+
+        Uses the ad/get/ endpoint. Values are not transformed: for Spark Ads,
+        tiktok_item_id and identity_id identify the promoted TikTok post.
+
+        Args:
+            advertiser_id: TikTok advertiser ID.
+            fields: Ad fields to request. Defaults to AD_FIELDS.
+            filtering: Raw ad/get/ filtering object, for example
+                {"primary_status": "STATUS_ALL"}. If None, TikTok's default
+                filter applies (it leaves deleted ads out).
+            page_size: Ads per page, 1 to 1000. Defaults to 1000.
+
+        Returns:
+            DataFrame with one row per ad and one column per requested field.
+            Empty, but with those columns, when the advertiser has no ads.
+
+        Raises:
+            RuntimeError: If TikTok returns an error or the request fails.
+        """
+        fields = list(fields) if fields else list(AD_FIELDS)
+        params = {
+            "advertiser_id": advertiser_id,
+            "fields": json.dumps(fields),
+            "page_size": page_size,
+        }
+        if filtering:
+            params["filtering"] = json.dumps(filtering)
+
+        records = []
+        page = 1
+        while True:
+            params["page"] = page
+            data = self._get_raw("ad/get/", params)
+            if data is None:
+                raise RuntimeError(
+                    f"Critical error found while listing ads for {advertiser_id}"
+                )
+
+            records.extend(data.get("data", {}).get("list") or [])
+            total_page = data.get("data", {}).get("page_info", {}).get("total_page", 1)
+            if page >= total_page:
+                break
+            page += 1
+
+        self.verbose.log(f"get_ads | {advertiser_id} | {len(records)} ads")
+        return pd.DataFrame(records, columns=fields)
 
     def get_report_json(self, params: dict, max_retries: int = 5):
         """Public method to retrieve raw JSON data with date chunking and pagination for debugging

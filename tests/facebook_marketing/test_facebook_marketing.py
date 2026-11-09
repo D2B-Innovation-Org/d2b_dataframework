@@ -147,6 +147,59 @@ def test_get_report_dataframe_no_duplicate_action_columns(fb, base_params, mocke
     assert df.columns.tolist().count("_action_purchase") == 1
 
 
+def test_get_report_dataframe_keeps_colliding_action_types(fb, base_params, mocker):
+    """The same action_type in two lists keeps both values.
+
+    The first list keeps the legacy _action_{type} name; the second gets
+    _action_{column}__{type} instead of being dropped.
+    """
+    raw = [
+        {
+            "impressions": "100",
+            "date_start": "2024-01-01",
+            "date_stop": "2024-01-01",
+            "account_id": "123",
+            "actions": [
+                {"action_type": "link_click", "value": "40"},
+                {"action_type": "video_view", "value": "500"},
+            ],
+            "video_avg_time_watched_actions": [
+                {"action_type": "video_view", "value": "6"}
+            ],
+            "cost_per_action_type": [{"action_type": "link_click", "value": "2.5"}],
+        }
+    ]
+    mocker.patch.object(fb, "get_report", return_value=raw)
+    df = fb.get_report_dataframe(base_params)
+
+    row = df.iloc[0]
+    assert row["_action_link_click"] == "40"
+    assert row["_action_video_view"] == "500"
+    assert row["_action_video_avg_time_watched_actions__video_view"] == "6"
+    assert row["_action_cost_per_action_type__link_click"] == "2.5"
+
+
+def test_get_report_dataframe_without_collisions_adds_no_new_columns(
+    fb, base_params, mocker
+):
+    """Reports without repeated action_types keep exactly the legacy columns."""
+    raw = [
+        {
+            "impressions": "100",
+            "date_start": "2024-01-01",
+            "date_stop": "2024-01-01",
+            "account_id": "123",
+            "actions": [{"action_type": "link_click", "value": "40"}],
+            "outbound_clicks": [{"action_type": "outbound_click", "value": "30"}],
+        }
+    ]
+    mocker.patch.object(fb, "get_report", return_value=raw)
+    df = fb.get_report_dataframe(base_params)
+
+    action_columns = sorted(c for c in df.columns if c.startswith("_action_"))
+    assert action_columns == ["_action_link_click", "_action_outbound_click"]
+
+
 # ---------------------------------------------------------------------------
 # get_report_dataframe — multiple accounts
 # ---------------------------------------------------------------------------
@@ -521,6 +574,62 @@ class TestGetAdsCreatives:
         image = df.iloc[1]
         assert image["image_hash"] == "abc123"
         assert pd.isna(image["video_id"])
+
+    def test_returns_piece_links(self, fb, mock_ad_account) -> None:
+        """Link fields from the ad and its creative come through unchanged."""
+        ad = {
+            **VIDEO_AD,
+            "preview_shareable_link": "https://fb.me/abc",
+            "creative": {
+                **VIDEO_AD["creative"],
+                "effective_object_story_id": "120372434674223_1042059044960664",
+                "effective_instagram_media_id": "17972515235960182",
+                "instagram_permalink_url": "https://www.instagram.com/p/DfhVNIBgNAQ/",
+            },
+        }
+        mock_ad_account.get_ads.return_value = [_make_ad(ad)]
+        row = fb.get_ads_creatives().iloc[0]
+
+        assert row["preview_shareable_link"] == "https://fb.me/abc"
+        assert row["effective_object_story_id"] == "120372434674223_1042059044960664"
+        assert row["effective_instagram_media_id"] == "17972515235960182"
+        assert (
+            row["instagram_permalink_url"]
+            == "https://www.instagram.com/p/DfhVNIBgNAQ/"
+        )
+
+    def test_link_fields_are_requested(self, fb, mock_ad_account) -> None:
+        """The ad and creative link fields are part of the API request."""
+        mock_ad_account.get_ads.return_value = []
+        fb.get_ads_creatives()
+
+        fields = mock_ad_account.get_ads.call_args.kwargs["fields"]
+        assert "preview_shareable_link" in fields
+        creative_field = fields[-1]
+        for name in (
+            "effective_object_story_id",
+            "effective_instagram_media_id",
+            "instagram_permalink_url",
+        ):
+            assert name in creative_field
+
+    def test_legacy_columns_keep_their_order(self) -> None:
+        """New link columns are appended; existing columns do not move."""
+        from d2b_data.Facebook_Marketing import CREATIVE_COLUMNS
+
+        assert CREATIVE_COLUMNS[:11] == [
+            "account_id",
+            "ad_id",
+            "ad_name",
+            "effective_status",
+            "updated_time",
+            "creative_id",
+            "object_type",
+            "thumbnail_url",
+            "image_url",
+            "image_hash",
+            "video_id",
+        ]
 
     def test_ad_without_creative_keeps_row(self, fb, mock_ad_account) -> None:
         """An ad with no creative produces a row with empty creative fields."""
