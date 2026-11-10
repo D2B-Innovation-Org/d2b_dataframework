@@ -23,6 +23,11 @@ CREATIVE_COLUMNS = [
     "image_url",
     "image_hash",
     "video_id",
+    # Enlaces a la pieza. Se agregan al final para no mover las columnas previas.
+    "preview_shareable_link",
+    "effective_object_story_id",
+    "effective_instagram_media_id",
+    "instagram_permalink_url",
 ]
 # Piso al achicar la página cuando Meta responde que la respuesta es muy grande.
 MIN_ADS_PAGE_SIZE = 25
@@ -33,6 +38,9 @@ CREATIVE_FIELDS = [
     "image_url",
     "image_hash",
     "video_id",
+    "effective_object_story_id",
+    "effective_instagram_media_id",
+    "instagram_permalink_url",
 ]
 
 
@@ -176,13 +184,14 @@ class Facebook_Marketing:
 
                 action_col_name = f"_action_{action}"
 
-                # --- LA SOLUCIÓN FINAL ---
-                # Verificamos si la columna ya existe en el DataFrame antes de intentar crearla.
+                # Varias listas pueden traer el mismo action_type (por ejemplo
+                # 'link_click' en actions y en cost_per_action_type). El nombre
+                # _action_{action} se lo queda la primera, como siempre; las demás
+                # van a _action_{columna}__{action} en vez de perderse.
                 if action_col_name in df_facebook.columns:
-                    self.logger.log(
-                        f"ADVERTENCIA: La columna '{action_col_name}' ya existe. Saltando para evitar duplicados."
-                    )
-                    continue
+                    action_col_name = f"_action_{column}__{action}"
+                    if action_col_name in df_facebook.columns:
+                        continue
                 df_facebook[action_col_name] = df_facebook[column].apply(
                     lambda x: self._split_text(x, action)
                 )
@@ -394,7 +403,14 @@ class Facebook_Marketing:
             f".thumbnail_height({thumbnail_size})"
             "{" + ",".join(CREATIVE_FIELDS) + "}"
         )
-        fields = ["id", "name", "effective_status", "updated_time", creative_field]
+        fields = [
+            "id",
+            "name",
+            "effective_status",
+            "updated_time",
+            "preview_shareable_link",
+            creative_field,
+        ]
         params = {"limit": page_size}
         if effective_status:
             params["effective_status"] = list(effective_status)
@@ -498,6 +514,12 @@ class Facebook_Marketing:
             "image_url": creative.get("image_url"),
             "image_hash": creative.get("image_hash"),
             "video_id": creative.get("video_id"),
+            "preview_shareable_link": data.get("preview_shareable_link"),
+            "effective_object_story_id": creative.get("effective_object_story_id"),
+            "effective_instagram_media_id": creative.get(
+                "effective_instagram_media_id"
+            ),
+            "instagram_permalink_url": creative.get("instagram_permalink_url"),
         }
 
     def _unique_actions(self, df):

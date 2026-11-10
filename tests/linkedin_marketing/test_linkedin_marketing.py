@@ -2,8 +2,10 @@
 
 These tests exercise only the logic that runs without touching the
 LinkedIn API: authentication from disk, header construction, argument
-validation and the early-return branches. Nothing is mocked, so every
-assertion here reflects real behaviour of the module.
+validation and the early-return branches. Nothing is mocked there, so
+those assertions reflect real behaviour of the module. The DataFrame
+enrichment tests at the end replace only the HTTP-backed methods
+(get_report and the name lookups) with canned LinkedIn responses.
 """
 
 import json
@@ -301,3 +303,131 @@ def test_get_report_dataframe_validates_in_both_branches(
             ["CAMPAIGN"],
             get_campaign_information=get_campaign_information,
         )
+
+
+# ------------------------------------------------------------------
+# get_report_dataframe — pivot enrichment
+# ------------------------------------------------------------------
+
+
+def _row(pivot_values, impressions=100):
+    return {
+        "impressions": impressions,
+        "clicks": 5,
+        "dateRange": {
+            "start": {"year": 2026, "month": 10, "day": 1},
+            "end": {"year": 2026, "month": 10, "day": 1},
+        },
+        "pivotValues": pivot_values,
+    }
+
+
+GROUP = "urn:li:sponsoredCampaignGroup:760043844"
+CAMPAIGN = "urn:li:sponsoredCampaign:903274144"
+CREATIVE = "urn:li:sponsoredCreative:1595684904"
+
+
+@pytest.fixture
+def enriched(marketing, monkeypatch):
+    """marketing with canned report rows and name lookups."""
+
+    def use(rows):
+        monkeypatch.setattr(marketing, "get_report", lambda *a, **k: rows)
+        monkeypatch.setattr(
+            marketing,
+            "_get_campaign_names",
+            lambda ids, acc: {"903274144": "Campaña A"} if ids else {},
+        )
+        monkeypatch.setattr(
+            marketing,
+            "_get_adset_names",
+            lambda ids, acc: {"760043844": "Grupo A"} if ids else {},
+        )
+        return marketing
+
+    return use
+
+
+def test_dataframe_group_and_campaign_output_is_unchanged(enriched):
+    """The current production pivots produce exactly the legacy columns."""
+    lk = enriched([_row([GROUP, CAMPAIGN])])
+
+    df = lk.get_report_dataframe(
+        "1", "2026-10-01", "2026-10-01", ["impressions", "clicks"],
+        ["CAMPAIGN_GROUP", "CAMPAIGN"],
+    )
+
+    assert df.columns.tolist() == [
+        "impressions",
+        "clicks",
+        "campaign_group_id",
+        "campaign_id",
+        "ad_set_name",
+        "campaign_name",
+        "date",
+    ]
+    row = df.iloc[0]
+    assert row["campaign_group_id"] == "760043844"
+    assert row["campaign_id"] == "903274144"
+    assert row["ad_set_name"] == "Grupo A"
+    assert row["campaign_name"] == "Campaña A"
+    assert str(row["date"].date()) == "2026-10-01"
+
+
+def test_dataframe_keeps_creative_id_with_three_pivots(enriched):
+    """With CREATIVE as third pivot its ID survives as creative_id."""
+    lk = enriched([_row([GROUP, CAMPAIGN, CREATIVE])])
+
+    df = lk.get_report_dataframe(
+        "1", "2026-10-01", "2026-10-01", ["impressions"],
+        ["CAMPAIGN_GROUP", "CAMPAIGN", "CREATIVE"],
+    )
+
+    row = df.iloc[0]
+    assert row["creative_id"] == "1595684904"
+    assert row["campaign_id"] == "903274144"
+    assert row["campaign_group_id"] == "760043844"
+    assert row["campaign_name"] == "Campaña A"
+    assert "pivotValues" not in df.columns
+
+
+def test_dataframe_supports_creative_only_pivot(enriched):
+    """A single CREATIVE pivot no longer fails with IndexError."""
+    lk = enriched([_row([CREATIVE])])
+
+    df = lk.get_report_dataframe(
+        "1", "2026-10-01", "2026-10-01", ["impressions"], ["CREATIVE"]
+    )
+
+    assert df.iloc[0]["creative_id"] == "1595684904"
+    assert "campaign_name" not in df.columns
+    assert "ad_set_name" not in df.columns
+
+
+def test_dataframe_follows_requested_pivot_order(enriched):
+    """IDs are read by pivot name, not by a fixed position."""
+    lk = enriched([_row([CAMPAIGN, GROUP])])
+
+    df = lk.get_report_dataframe(
+        "1", "2026-10-01", "2026-10-01", ["impressions"],
+        ["CAMPAIGN", "CAMPAIGN_GROUP"],
+    )
+
+    row = df.iloc[0]
+    assert row["campaign_id"] == "903274144"
+    assert row["campaign_group_id"] == "760043844"
+    assert row["campaign_name"] == "Campaña A"
+    assert row["ad_set_name"] == "Grupo A"
+
+
+def test_dataframe_unknown_campaign_name_is_none(enriched):
+    """A campaign missing from the name lookup keeps a null name."""
+    other = "urn:li:sponsoredCampaign:1"
+    lk = enriched([_row([GROUP, other])])
+
+    df = lk.get_report_dataframe(
+        "1", "2026-10-01", "2026-10-01", ["impressions"],
+        ["CAMPAIGN_GROUP", "CAMPAIGN"],
+    )
+
+    assert df.iloc[0]["campaign_name"] is None
