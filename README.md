@@ -52,6 +52,7 @@ pytest
 | 🌿 **Facebook Organic** | `FacebookOrganic` | Page Insights via Graph API — posts, reactions, impressions, reach. |
 | 📊 **GA4** | `Google_GA4` | Fetch reports and real-time analytics data. |
 | ☁️ **BigQuery** | `Google_Bigquery` | Streamline SQL queries and data uploads. |
+| **BigQuery partitioned loads** | `load_df_to_partitioned_table` (`bq_loader`) | Atomic per-day partition replacement (`WRITE_TRUNCATE` on `table$YYYYMMDD`), optional table creation. |
 | 📝 **Sheets** | `Google_Spreadsheet` | Read/Write operations on Google Sheets. |
 | 🔑 **Auth** | `Google_Token_MNG` | Manage OAuth2 tokens and credentials. |
 | **Google Ads** | `GoogleAds` | Raw GAQL reports via `search_stream` (optional: `pip install "d2b_data[google_ads]"`). |
