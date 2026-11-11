@@ -27,6 +27,12 @@ Forecasting is optional because Prophet compiles Stan and takes a while to insta
 pip install "d2b_data[forecasting] @ git+https://github.com/D2b-Innovation/d2b_dataframework.git"
 ```
 
+Google Ads is optional too, because the `google-ads` wheel is large:
+
+```bash
+pip install "d2b_data[google_ads] @ git+https://github.com/D2b-Innovation/d2b_dataframework.git"
+```
+
 ### 3. Local development
 
 ```bash
@@ -48,6 +54,7 @@ pytest
 | ☁️ **BigQuery** | `Google_Bigquery` | Streamline SQL queries and data uploads. |
 | 📝 **Sheets** | `Google_Spreadsheet` | Read/Write operations on Google Sheets. |
 | 🔑 **Auth** | `Google_Token_MNG` | Manage OAuth2 tokens and credentials. |
+| **Google Ads** | `GoogleAds` | Raw GAQL reports via `search_stream` (optional: `pip install "d2b_data[google_ads]"`). |
 | 💼 **LinkedIn Ads** | `LinkedinMarketing` | Extract B2B marketing performance metrics from the Ads Reporting API. |
 | 💼 **LinkedIn Organic** | `LinkedinOrganic` | Page posts, follower stats and engagement via Community Management API. |
 | 🎵 **TikTok** | `TikTokMarketing` | Integration with TikTok Ads API. |
@@ -86,6 +93,44 @@ print(df.head())
 ```
 
 Requires a Page Access Token with `pages_read_engagement` and `read_insights` permissions.
+
+### Google Ads
+
+```python
+from d2b_data.google_ads import GoogleAds, GoogleAdsQuotaError
+
+ads = GoogleAds(
+    developer_token="...",
+    client_id="...",
+    client_secret="...",
+    refresh_token="...",             # scope https://www.googleapis.com/auth/adwords
+    login_customer_id="123-456-7890",  # manager (MCC) account; optional
+)
+# Or read what is missing from a JSON with the same keys:
+# GoogleAds(developer_token="...", token_path="google_ads.json")
+
+print(ads.list_accessible_customers())  # connection test
+
+df = ads.get_report_df(
+    customer_id="1234567890",
+    resource="campaign",
+    fields=["segments.date", "campaign.id", "campaign.name", "metrics.cost_micros"],
+    start_date="2026-11-01",
+    end_date="2026-11-10",
+    where=["campaign.status != 'REMOVED'"],
+)
+```
+
+Data is raw: columns are the GAQL field paths (`metrics.cost_micros`), costs stay
+in micros, and enums come back by name (`"ENABLED"`). Transient errors are retried
+up to 3 times; quota errors raise `GoogleAdsQuotaError` without retrying; any other
+API error raises `GoogleAdsRequestError` with the request id.
+
+To get a refresh token (local and interactive only, it opens a browser):
+
+```python
+GoogleAds.generate_refresh_token("client_secret.json", token_path="google_ads.json")
+```
 
 ### Forecasting (Prophet)
 

@@ -49,7 +49,11 @@ dependencies = [
 # Prophet compila Stan: es lento y pesado, por eso queda fuera del núcleo.
 # ProphetForecaster lo importa de forma diferida y avisa si falta.
 forecasting = ["prophet"]
+# El wheel de google-ads pesa ~19 MB y casi ninguna función el-* lo usa.
+# GoogleAds lo importa de forma diferida y avisa si falta.
+google_ads = ["google-ads"]
 dev = [
+    "google-ads",
     "pytest",
     "pytest-mock",
     "pytest-cov",
