@@ -59,6 +59,7 @@ pytest
 | 💼 **LinkedIn Ads** | `LinkedinMarketing` | Extract B2B marketing performance metrics from the Ads Reporting API. |
 | 💼 **LinkedIn Organic** | `LinkedinOrganic` | Page posts, follower stats and engagement via Community Management API. |
 | 🎵 **TikTok** | `TikTokMarketing` | Integration with TikTok Ads API. |
+| 🎵 **TikTok Organic** | `TikTokOrganic` | Daily account metrics, video stats and profile/audience snapshots via TikTok Accounts (API for Business). |
 | 🐦 **X (Twitter)** | `X_ads` | Handle X Ads data reporting. |
 | 🔮 **Forecasting** | `ProphetForecaster` | Time-series forecasting with Meta Prophet (optional: `pip install prophet`). |
 
@@ -132,6 +133,31 @@ To get a refresh token (local and interactive only, it opens a browser):
 ```python
 GoogleAds.generate_refresh_token("client_secret.json", token_path="google_ads.json")
 ```
+
+### TikTok Organic (TikTok Accounts)
+
+```python
+from d2b_data.tiktok_organic import TikTokOrganic, QuotaExhaustedError
+
+# token.json: the `data` object returned by /tt_user/oauth2/token/
+# (access_token, refresh_token, open_id, ...), authorized by the account owner.
+tiktok = TikTokOrganic(token_path="token.json")
+
+# The access token lasts 24 hours and every refresh rotates the refresh token:
+# refresh on each run and persist token.json afterwards.
+tiktok.refresh_access_token(client_id="...", client_secret="...")
+
+daily = tiktok.get_daily_stats("2026-11-01", "2026-11-10")  # one row per day
+videos = tiktok.get_videos()                                # one row per video
+profile = tiktok.get_profile_snapshot()                     # one row
+```
+
+Data is raw: metrics TikTok derives from other fields (averages, engagement and
+growth rates) are not requested, and nested lists (audience breakdowns, impression
+sources, retention) are JSON strings. Daily metrics only go back 60 days; older
+start dates are clamped. Fields TikTok omits for an account or video are absent
+from the DataFrame. Throttling raises `QuotaExhaustedError`; any other API error
+raises `TikTokApiError` with TikTok's code.
 
 ### Forecasting (Prophet)
 
