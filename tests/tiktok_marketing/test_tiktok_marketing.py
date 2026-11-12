@@ -512,3 +512,81 @@ def test_get_ads_raises_on_api_error(tiktok, mocker):
 
     with pytest.raises(RuntimeError):
         tiktok.get_ads("123")
+
+
+# --------------------------------------------------------------------- #
+# Detalle del error para load_result
+# --------------------------------------------------------------------- #
+def test_get_raw_keeps_permission_error_detail(tiktok, mocker):
+    """A TikTok 40001 is kept as a TikTokMarketingError equivalent to HTTP 403."""
+    from d2b_data.load_result import ErrorKind, classify_error
+    from d2b_data.tiktok_marketing import TikTokMarketingError
+
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"code": 40001, "message": "No permission"}
+    mocker.patch("d2b_data.tiktok_marketing.requests.get", return_value=fake_response)
+
+    assert tiktok._get_report_raw(params={}) is None
+    assert isinstance(tiktok.last_error, TikTokMarketingError)
+    assert tiktok.last_error.status_code == 403
+    assert tiktok.last_error.api_code == 40001
+    assert classify_error(tiktok.last_error) is ErrorKind.AUTH
+
+
+@pytest.mark.parametrize(
+    "api_code, expected_status",
+    [(40105, 401), (40104, 401), (40100, 429), (50000, 500), (40002, None)],
+)
+def test_get_raw_maps_tiktok_codes(tiktok, mocker, api_code, expected_status):
+    """TikTok codes map to the equivalent HTTP status, unknown ones to None."""
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"code": api_code, "message": "err"}
+    mocker.patch("d2b_data.tiktok_marketing.requests.get", return_value=fake_response)
+
+    tiktok._get_report_raw(params={})
+    assert tiktok.last_error.status_code == expected_status
+
+
+def test_get_raw_success_clears_last_error(tiktok, mocker):
+    """A successful call leaves last_error empty."""
+    tiktok.last_error = RuntimeError("old")
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"code": 0, "data": {"list": []}}
+    mocker.patch("d2b_data.tiktok_marketing.requests.get", return_value=fake_response)
+
+    tiktok._get_report_raw(params={})
+    assert tiktok.last_error is None
+
+
+def test_get_raw_http_exception_keeps_status(tiktok, mocker):
+    """An HTTP exception keeps its status code."""
+    http_error = Exception("503 Server Error")
+    http_error.response = MagicMock(status_code=503)
+    mocker.patch("d2b_data.tiktok_marketing.requests.get", side_effect=http_error)
+
+    tiktok._get_report_raw(params={})
+    assert tiktok.last_error.status_code == 503
+
+
+def test_get_report_dataframe_raises_detailed_error(tiktok, mocker):
+    """The raised error is the one recorded by _get_raw, still a RuntimeError."""
+    from d2b_data.tiktok_marketing import TikTokMarketingError
+
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.json.return_value = {"code": 40001, "message": "No permission"}
+    mocker.patch("d2b_data.tiktok_marketing.requests.get", return_value=fake_response)
+
+    with pytest.raises(TikTokMarketingError) as caught:
+        tiktok.get_report_dataframe(
+            advertiser_id="1",
+            start_date="2026-11-01",
+            end_date="2026-11-02",
+            dimensions=["stat_time_day", "ad_id"],
+            metrics=["spend"],
+        )
+    assert isinstance(caught.value, RuntimeError)
+    assert "No permission" in str(caught.value)

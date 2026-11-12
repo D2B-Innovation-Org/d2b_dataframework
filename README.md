@@ -52,6 +52,8 @@ pytest
 | 🌿 **Facebook Organic** | `FacebookOrganic` | Page Insights via Graph API — posts, reactions, impressions, reach. |
 | 📊 **GA4** | `Google_GA4` | Fetch reports and real-time analytics data. |
 | ☁️ **BigQuery** | `Google_Bigquery` | Streamline SQL queries and data uploads. |
+| **Load guard** | `LoadGuard` (`load_guard`) | Control table `ops.load_log`: skips a load already done today, records each load. |
+| **Load result** | `LoadReport`, `classify_error`, `call_with_retries` (`load_result`) | Shared error contract for el-* functions: 401/403 stops the account, 429/5xx retried, final HTTP code (200 ok / 200 partial + alert / 500 + alert). |
 | **BigQuery partitioned loads** | `load_df_to_partitioned_table` (`bq_loader`) | Atomic per-day partition replacement (`WRITE_TRUNCATE` on `table$YYYYMMDD`), optional table creation. |
 | 📝 **Sheets** | `Google_Spreadsheet` | Read/Write operations on Google Sheets. |
 | 🔑 **Auth** | `Google_Token_MNG` | Manage OAuth2 tokens and credentials. |

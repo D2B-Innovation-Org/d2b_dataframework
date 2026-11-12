@@ -8,6 +8,7 @@ import webbrowser
 import pandas as pd
 import requests
 
+from d2b_data.load_result import ExtractionError
 from d2b_data.verbose_logger import Verbose
 
 # Campos por defecto de get_ads. tiktok_item_id e identity_id identifican el post
@@ -27,6 +28,43 @@ AD_FIELDS = [
     "create_time",
     "modify_time",
 ]
+
+
+# Códigos propios de TikTok traducidos al código HTTP equivalente, para que
+# load_result.classify_error decida si cortar la cuenta o reintentar.
+_TIKTOK_CODE_TO_HTTP = {
+    40001: 403,  # sin permiso sobre el advertiser
+    40100: 429,  # demasiadas solicitudes
+    40104: 401,  # access token vacío
+    40105: 401,  # access token inválido o expirado
+}
+
+
+class TikTokMarketingError(ExtractionError):
+    """Error de la Marketing API de TikTok con su código HTTP equivalente.
+
+    Es subclase de RuntimeError, así que el código que ya captura
+    RuntimeError sigue funcionando.
+    """
+
+
+def _http_status_for(api_code: object) -> int | None:
+    """Traduce un código de TikTok al código HTTP equivalente.
+
+    Args:
+        api_code: Campo 'code' de la respuesta de TikTok.
+
+    Returns:
+        El código HTTP, 500 para los errores de sistema (5xxxx) o None si el
+        código no es conocido.
+    """
+    if not isinstance(api_code, int):
+        return None
+    if api_code in _TIKTOK_CODE_TO_HTTP:
+        return _TIKTOK_CODE_TO_HTTP[api_code]
+    if 50000 <= api_code < 60000:
+        return 500
+    return None
 
 
 class TikTokMarketing:
@@ -75,6 +113,9 @@ class TikTokMarketing:
         self.app_id = None
         self.secret = None
         self.headers = {"Content-Type": "application/json"}
+        # Último error de _get_raw. _get_raw devuelve None ante un error, y
+        # esto guarda el detalle para que el error lanzado diga qué pasó.
+        self.last_error: TikTokMarketingError | None = None
 
         self.verbose = Verbose(
             active=verbose, alerts_enabled=False, workflow_name="TikTokMarketing class"
@@ -148,8 +189,10 @@ class TikTokMarketing:
         """GET an endpoint under endpoint_base, with backoff on HTTP 429.
 
         Returns the parsed JSON when TikTok answers code 0, otherwise None.
+        On None, self.last_error holds a TikTokMarketingError with the details.
         """
         url = f"{self.endpoint_base}{endpoint}"
+        self.last_error = None
         for attempt in range(max_retries):
             try:
                 response = requests.get(url, headers=self.headers, params=params)
@@ -159,6 +202,9 @@ class TikTokMarketing:
                     self.verbose.log(
                         f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds"
                     )
+                    self.last_error = TikTokMarketingError(
+                        "TikTok API rate limit exceeded", status_code=429
+                    )
                     time.sleep(wait_time)
                     continue
 
@@ -166,8 +212,15 @@ class TikTokMarketing:
                 data = response.json()
 
                 if data.get("code") != 0:
-                    self.verbose.log(
-                        f"TikTok API Error: {data.get('message')} (Code: {data.get('code')})"
+                    api_code = data.get("code")
+                    message = (
+                        f"TikTok API Error: {data.get('message')} (Code: {api_code})"
+                    )
+                    self.verbose.log(message)
+                    self.last_error = TikTokMarketingError(
+                        message,
+                        status_code=_http_status_for(api_code),
+                        api_code=api_code,
                     )
                     return None
 
@@ -175,8 +228,23 @@ class TikTokMarketing:
 
             except Exception as e:
                 self.verbose.log(f"Request failed: {e}")
+                http_response = getattr(e, "response", None)
+                status_code = getattr(http_response, "status_code", None)
+                self.last_error = TikTokMarketingError(
+                    f"TikTok request failed: {e}", status_code=status_code
+                )
                 return None
         return None
+
+    def _download_error(self) -> TikTokMarketingError:
+        """Arma el error a lanzar cuando una descarga del reporte falla.
+
+        Returns:
+            El último error registrado por _get_raw, o uno genérico si no hay.
+        """
+        if self.last_error is not None:
+            return self.last_error
+        return TikTokMarketingError("Critical error found while downloading data")
 
     def validate_connection(self) -> bool:
         """Public method to validate current token connection"""
@@ -448,7 +516,7 @@ class TikTokMarketing:
                 data = self._get_report_raw(params)
 
                 if data == None:
-                    raise RuntimeError("Critical error found while downloading data")
+                    raise self._download_error()
 
                 if not data or "list" not in data.get("data", {}):
                     break
@@ -500,9 +568,7 @@ class TikTokMarketing:
                     data = self._get_report_raw(params)
 
                     if data == None:
-                        raise RuntimeError(
-                            "Critical error found while downloading data"
-                        )
+                        raise self._download_error()
 
                     if not data or "list" not in data.get("data", {}):
                         break
