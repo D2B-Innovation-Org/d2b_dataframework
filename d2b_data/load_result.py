@@ -164,7 +164,7 @@ def call_with_retries(
     attempts: int = 3,
     base_delay: float = 2.0,
     logger: Optional[Any] = None,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Optional[Callable[[float], None]] = None,
 ) -> T:
     """Ejecuta func y la reintenta solo ante errores transitorios.
 
@@ -177,7 +177,8 @@ def call_with_retries(
         base_delay: Segundos de espera antes del segundo intento; se duplica
             en cada intento siguiente.
         logger: Objeto con warning(); si es None no registra nada.
-        sleep: Función de espera, reemplazable en los tests.
+        sleep: Función de espera; por defecto time.sleep, que se busca al
+            llamar para que los tests puedan reemplazarla.
 
     Returns:
         Lo que devuelva func.
@@ -189,6 +190,7 @@ def call_with_retries(
     """
     if attempts < 1:
         raise ValueError(f"attempts debe ser al menos 1, llegó {attempts}")
+    wait_for = sleep if sleep is not None else time.sleep
 
     for attempt in range(1, attempts + 1):
         try:
@@ -203,7 +205,7 @@ def call_with_retries(
                     f"load_result | error transitorio (intento {attempt} de "
                     f"{attempts}), se reintenta en {wait:.1f}s: {error}"
                 )
-            sleep(wait)
+            wait_for(wait)
 
     # Inalcanzable: el bucle devuelve o relanza en el último intento.
     raise RuntimeError("call_with_retries terminó sin resultado")
