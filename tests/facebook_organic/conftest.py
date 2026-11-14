@@ -10,4 +10,4 @@ def fb():
 
 @pytest.fixture
 def metrics():
-    return ["post_impressions", "post_engaged_users", "post_clicks"]
+    return ["post_media_view", "post_clicks"]
