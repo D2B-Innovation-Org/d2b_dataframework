@@ -2,117 +2,65 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
-import requests
 
-# ---------------------------------------------------------------------------
-# _get — HTTP layer
-# ---------------------------------------------------------------------------
+from d2b_data.instagram_organic import InstagramOrganic
+from d2b_data.meta_graph import GRAPH_API_VERSION, MetaErrorCategory, MetaGraphError
 
 
-def test_get_injects_access_token(ig, mocker):
-    """access_token is always added to the request params."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
-    mock_resp.json.return_value = {"data": []}
-    mock_get = mocker.patch("requests.get", return_value=mock_resp)
-
-    ig._get("/some/endpoint", {"field": "value"})
-
-    _, kwargs = mock_get.call_args
-    assert kwargs["params"]["access_token"] == "fake_token"
-    assert kwargs["params"]["field"] == "value"
+def graph_error(category, code=None, http_status=400):
+    return MetaGraphError(
+        f"error {code}", category, http_status=http_status, api_code=code
+    )
 
 
-def test_get_raises_on_http_error(ig, mocker):
-    """HTTP 4xx/5xx raises requests.HTTPError."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = requests.HTTPError("403")
-    mock_resp.text = "Forbidden"
-    mocker.patch("requests.get", return_value=mock_resp)
-
-    with pytest.raises(requests.HTTPError):
-        ig._get("/bad/endpoint", {})
+def api_resp(status=200, payload=None):
+    """Fake requests.Response for Session.get."""
+    r = MagicMock()
+    r.status_code = status
+    r.json.return_value = payload if payload is not None else {}
+    return r
 
 
-def test_get_raises_on_api_error_payload(ig, mocker):
-    """Graph API error payloads (200 OK with 'error' key) raise ValueError."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
-    mock_resp.json.return_value = {"error": {"code": 190, "message": "Invalid token"}}
-    mocker.patch("requests.get", return_value=mock_resp)
-
-    with pytest.raises(ValueError, match="Invalid token"):
-        ig._get("/me", {})
-
-
-def test_get_returns_payload_on_success(ig, mocker):
-    """Successful response returns the parsed JSON dict."""
-    payload = {"data": [{"id": "1"}], "paging": {}}
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
-    mock_resp.json.return_value = payload
-    mocker.patch("requests.get", return_value=mock_resp)
-
-    result = ig._get("/some/endpoint", {})
-    assert result == payload
+MEDIA = [
+    {"id": "1", "media_product_type": "FEED"},
+    {"id": "2", "media_product_type": "REELS"},
+    {"id": "3", "media_product_type": "FEED"},
+    {"id": "4", "media_product_type": "AD"},
+]
 
 
 # ---------------------------------------------------------------------------
-# _paginate — cursor-based pagination
+# Instantiation and repr
 # ---------------------------------------------------------------------------
 
 
-def _make_get_side_effect(pages):
-    """Return a side_effect callable that cycles through page payloads."""
-    iterator = iter(pages)
-
-    def side_effect(endpoint, params):
-        return next(iterator)
-
-    return side_effect
+def test_default_api_version(ig):
+    assert ig.graph.api_version == GRAPH_API_VERSION == "v25.0"
+    assert ig.graph.base_url == "https://graph.facebook.com/v25.0"
 
 
-def test_paginate_single_page(ig, mocker):
-    """Single page with no 'next' link returns all records."""
-    page = {"data": [{"id": "1"}, {"id": "2"}], "paging": {}}
-    mocker.patch.object(ig, "_get", side_effect=_make_get_side_effect([page]))
-
-    result = ig._paginate("/acc/media", {})
-    assert result == [{"id": "1"}, {"id": "2"}]
+def test_api_version_override():
+    ig = InstagramOrganic(access_token="fake_token", api_version="v26.0")
+    assert ig.graph.base_url.endswith("/v26.0")
 
 
-def test_paginate_multiple_pages(ig, mocker):
-    """Pagination follows next cursor until exhausted."""
-    pages = [
-        {
-            "data": [{"id": "1"}],
-            "paging": {"next": "url", "cursors": {"after": "cur1"}},
-        },
-        {
-            "data": [{"id": "2"}],
-            "paging": {"next": "url", "cursors": {"after": "cur2"}},
-        },
-        {"data": [{"id": "3"}], "paging": {}},
-    ]
-    mocker.patch.object(ig, "_get", side_effect=_make_get_side_effect(pages))
-
-    result = ig._paginate("/acc/media", {})
-    assert [r["id"] for r in result] == ["1", "2", "3"]
+def test_repr_does_not_need_page_id_nor_leak_token():
+    ig = InstagramOrganic(access_token="secret_token")
+    assert repr(ig) == "<InstagramOrganic api_version=v25.0>"
+    assert "secret_token" not in repr(ig)
 
 
-def test_paginate_stops_on_empty_data(ig, mocker):
-    """Pagination stops when an empty data page is returned."""
-    pages = [
-        {
-            "data": [{"id": "1"}],
-            "paging": {"next": "url", "cursors": {"after": "cur1"}},
-        },
-        {"data": [], "paging": {"next": "url", "cursors": {"after": "cur2"}}},
-    ]
-    mocker.patch.object(ig, "_get", side_effect=_make_get_side_effect(pages))
+def test_requests_go_through_session_with_bearer_header(ig, mocker):
+    get = mocker.patch.object(
+        ig.graph.session, "get", return_value=api_resp(payload={"data": [], "paging": {}})
+    )
 
-    result = ig._paginate("/acc/media", {})
-    assert len(result) == 1
+    ig._get_stories("acc123")
+
+    args, kwargs = get.call_args
+    assert args[0] == "https://graph.facebook.com/v25.0/acc123/stories"
+    assert kwargs["headers"] == {"Authorization": "Bearer fake_token"}
+    assert "access_token" not in kwargs["params"]
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +75,7 @@ def test_get_media_filters_by_product_type(ig, mocker):
         {"id": "2", "media_product_type": "REELS"},
         {"id": "3", "media_product_type": "FEED"},
     ]
-    mocker.patch.object(ig, "_paginate", return_value=all_media)
+    mocker.patch.object(ig.graph, "paginate", return_value=all_media)
 
     result = ig._get_media("acc123", "2024-01-01", "2024-01-31", "FEED")
     assert len(result) == 2
@@ -137,7 +85,7 @@ def test_get_media_filters_by_product_type(ig, mocker):
 def test_get_media_returns_empty_when_no_match(ig, mocker):
     """Returns empty list when no media matches the requested type."""
     mocker.patch.object(
-        ig, "_paginate", return_value=[{"id": "1", "media_product_type": "REELS"}]
+        ig.graph, "paginate", return_value=[{"id": "1", "media_product_type": "REELS"}]
     )
 
     result = ig._get_media("acc123", "2024-01-01", "2024-01-31", "FEED")
@@ -151,7 +99,7 @@ def test_get_media_returns_empty_when_no_match(ig, mocker):
 
 def test_get_stories_uses_stories_endpoint(ig, mocker):
     """Stories are fetched from /{ig_account_id}/stories."""
-    mock_paginate = mocker.patch.object(ig, "_paginate", return_value=[{"id": "s1"}])
+    mock_paginate = mocker.patch.object(ig.graph, "paginate", return_value=[{"id": "s1"}])
 
     ig._get_stories("acc123")
 
@@ -161,7 +109,7 @@ def test_get_stories_uses_stories_endpoint(ig, mocker):
 
 def test_get_stories_returns_all_stories(ig, mocker):
     stories = [{"id": "s1"}, {"id": "s2"}]
-    mocker.patch.object(ig, "_paginate", return_value=stories)
+    mocker.patch.object(ig.graph, "paginate", return_value=stories)
 
     result = ig._get_stories("acc123")
     assert result == stories
@@ -174,17 +122,17 @@ def test_get_stories_returns_all_stories(ig, mocker):
 
 def test_flatten_insights_extracts_lifetime_values(ig):
     data = [
-        {"name": "impressions", "period": "lifetime", "values": [{"value": 500}]},
+        {"name": "views", "period": "lifetime", "values": [{"value": 500}]},
         {"name": "reach", "period": "lifetime", "values": [{"value": 300}]},
     ]
     result = ig._flatten_insights(data)
-    assert result == {"impressions": 500, "reach": 300}
+    assert result == {"views": 500, "reach": 300}
 
 
 def test_flatten_insights_returns_none_for_empty_values(ig):
-    data = [{"name": "impressions", "period": "lifetime", "values": []}]
+    data = [{"name": "views", "period": "lifetime", "values": []}]
     result = ig._flatten_insights(data)
-    assert result["impressions"] is None
+    assert result["views"] is None
 
 
 def test_flatten_insights_empty_data(ig):
@@ -199,8 +147,8 @@ def test_flatten_insights_empty_data(ig):
 def test_get_media_insights_returns_flat_dict(ig, mocker):
     """Successful insights call returns flattened metrics."""
     mocker.patch.object(
-        ig,
-        "_get",
+        ig.graph,
+        "get",
         return_value={
             "data": [{"name": "likes", "period": "lifetime", "values": [{"value": 42}]}]
         },
@@ -209,19 +157,40 @@ def test_get_media_insights_returns_flat_dict(ig, mocker):
     assert result == {"likes": 42}
 
 
-def test_get_media_insights_returns_empty_dict_on_failure(ig, mocker):
-    """Errors during insights fetch return {} so processing continues."""
-    mocker.patch.object(ig, "_get", side_effect=ValueError("unavailable"))
+@pytest.mark.parametrize(
+    "category",
+    [MetaErrorCategory.AUTH, MetaErrorCategory.PERMISSION, MetaErrorCategory.QUOTA],
+)
+def test_get_media_insights_propagates_account_wide_errors(ig, mocker, category):
+    mocker.patch.object(ig.graph, "get", side_effect=graph_error(category, 190))
 
-    result = ig._get_media_insights("media123", ["likes"])
-    assert result == {}
+    with pytest.raises(MetaGraphError) as info:
+        ig._get_media_insights("media123", ["likes"])
+    assert info.value.category is category
 
 
-def test_get_media_insights_returns_empty_dict_on_http_error(ig, mocker):
-    mocker.patch.object(ig, "_get", side_effect=requests.HTTPError("500"))
+@pytest.mark.parametrize(
+    "category", [MetaErrorCategory.OTHER, MetaErrorCategory.TRANSIENT]
+)
+def test_get_media_insights_other_errors_are_logged_and_skipped(ig, mocker, category):
+    mocker.patch.object(ig.graph, "get", side_effect=graph_error(category, 100))
+    log = mocker.patch.object(ig.logger, "log")
 
-    result = ig._get_media_insights("media123", ["impressions"])
-    assert result == {}
+    assert ig._get_media_insights("media123", ["likes"]) == {}
+
+    messages = [c.args[0] for c in log.call_args_list]
+    assert any("media123" in m and "100" in m for m in messages)
+
+
+def test_get_media_insights_end_to_end_quota_error(ig, mocker):
+    mocker.patch.object(
+        ig.graph.session,
+        "get",
+        return_value=api_resp(400, {"error": {"code": 4, "message": "limit"}}),
+    )
+    with pytest.raises(MetaGraphError) as info:
+        ig._get_media_insights("media123", ["likes"])
+    assert info.value.category is MetaErrorCategory.QUOTA
 
 
 # ---------------------------------------------------------------------------
@@ -254,13 +223,13 @@ def test_build_dataframe_one_row_per_media(ig, feed_metrics, mocker):
             "permalink": "https://ig.com/p/def",
         },
     ]
-    mocker.patch.object(ig, "_get_media_insights", return_value={"impressions": 100})
+    mocker.patch.object(ig, "_get_media_insights", return_value={"views": 100})
 
     df = ig._build_dataframe(media_list, "acc123", feed_metrics)
 
     assert len(df) == 2
     assert list(df["media_id"]) == ["m1", "m2"]
-    assert "impressions" in df.columns
+    assert "views" in df.columns
 
 
 def test_build_dataframe_timestamp_is_datetime(ig, feed_metrics, mocker):
@@ -297,6 +266,16 @@ def test_build_dataframe_insight_failure_still_produces_row(ig, feed_metrics, mo
     df = ig._build_dataframe(media_list, "acc123", feed_metrics)
     assert len(df) == 1
     assert df.iloc[0]["media_id"] == "m1"
+
+
+def test_build_dataframe_missing_fields_are_none_not_defaults(ig, feed_metrics, mocker):
+    mocker.patch.object(ig, "_get_media_insights", return_value={})
+
+    df = ig._build_dataframe([{"id": "m1", "timestamp": "2024-01-01T10:00:00+0000"}], "acc123", feed_metrics)
+
+    for column in ("caption", "permalink", "media_type", "media_product_type"):
+        assert column in df.columns
+        assert pd.isna(df.iloc[0][column])
 
 
 # ---------------------------------------------------------------------------
@@ -346,21 +325,49 @@ def test_get_feed_returns_dataframe(ig, feed_metrics, mocker):
 # ---------------------------------------------------------------------------
 
 
-def test_get_all_returns_dict_with_three_keys(ig, feed_metrics, story_metrics, mocker):
-    empty_df = pd.DataFrame()
-    mocker.patch.object(ig, "get_feed", return_value=empty_df)
-    mocker.patch.object(ig, "get_reels", return_value=empty_df)
-    mocker.patch.object(ig, "get_stories", return_value=empty_df)
+def test_get_all_lists_media_once_and_splits_client_side(
+    ig, feed_metrics, story_metrics, mocker
+):
+    paginate = mocker.patch.object(
+        ig.graph, "paginate", side_effect=[MEDIA, [{"id": "s1"}]]
+    )
+    mocker.patch.object(ig, "_get_media_insights", return_value={"views": 1})
 
     result = ig.get_all(
         "acc123",
         feed_metrics=feed_metrics,
         reels_metrics=feed_metrics,
         story_metrics=story_metrics,
+        since="2024-01-01",
+        until="2024-01-31",
     )
 
+    endpoints = [c.args[0] for c in paginate.call_args_list]
+    assert endpoints == ["/acc123/media", "/acc123/stories"]
     assert set(result.keys()) == {"feed", "reels", "stories"}
+    assert list(result["feed"]["media_id"]) == ["1", "3"]
+    assert list(result["reels"]["media_id"]) == ["2"]
+    assert list(result["stories"]["media_id"]) == ["s1"]
     assert all(isinstance(v, pd.DataFrame) for v in result.values())
+
+
+def test_get_all_uses_each_metric_list(ig, mocker):
+    mocker.patch.object(ig.graph, "paginate", side_effect=[MEDIA, []])
+    insights = mocker.patch.object(ig, "_get_media_insights", return_value={})
+
+    ig.get_all("acc123", ["f"], ["r"], ["s"], "2024-01-01", "2024-01-31")
+
+    used = {c.args[0]: c.args[1] for c in insights.call_args_list}
+    assert used["1"] == ["f"]
+    assert used["2"] == ["r"]
+
+
+def test_get_all_empty_account(ig, feed_metrics, mocker):
+    mocker.patch.object(ig.graph, "paginate", side_effect=[[], []])
+
+    result = ig.get_all("acc123", feed_metrics, feed_metrics, feed_metrics)
+
+    assert all(df.empty for df in result.values())
 
 
 # ---------------------------------------------------------------------------

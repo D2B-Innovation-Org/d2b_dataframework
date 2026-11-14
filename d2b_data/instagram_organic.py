@@ -1,25 +1,26 @@
-import logging
 from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-import requests
+from d2b_data.meta_graph import GRAPH_API_VERSION, MetaGraphClient, MetaGraphError
 from d2b_data.workflow_logger import resolve_logger
 
 
 class InstagramOrganic:
     """Abstraction layer for the Instagram Graph API Media Insights (organic).
 
-    Handles authentication, pagination, media retrieval, and media-level
-    insights extraction for FEED posts, REELS, and STORIES.
+    Handles media retrieval and media-level insights extraction for FEED
+    posts, REELS, and STORIES. HTTP, auth, retries and pagination live in
+    ``MetaGraphClient`` (``self.graph``).
 
-    Designed to mirror the interface of Facebook_Organic so it can be
-    dropped into the same ETL patterns.
+    Designed to mirror the interface of FacebookOrganic so it can be
+    dropped into the same ETL patterns. Data is raw: a value the API does
+    not return is None, never a made-up empty string.
 
     Attributes:
-        access_token: Page Access Token with instagram_basic and
-            instagram_manage_insights permissions.
-        base_url: Base URL for the Graph API, pinned to v20.0.
+        graph: Shared Graph API client (token, session, API version).
+        logger: Logger with .log() and .critical().
+        MEDIA_FIELDS: Fields requested for every media object.
     """
 
     def __init__(
@@ -28,133 +29,62 @@ class InstagramOrganic:
         logger=None,
         *,
         verbose_logger=None,
+        api_version: str = GRAPH_API_VERSION,
     ) -> None:
-        """Initialize the Instagram_Organic client.
+        """Initialize the InstagramOrganic client.
+
+        The Instagram account ID is not a constructor argument: pass it to
+        each method so one instance can serve several accounts.
 
         Args:
             access_token: A valid Page Access Token with instagram_basic
                 and instagram_manage_insights permissions.
             logger: Optional logger instance. Must expose a .log()
                 and .critical() method. If None, falls back to stdlib logging.
+            verbose_logger: Deprecated alias of ``logger``.
+            api_version: Graph API version; defaults to GRAPH_API_VERSION.
         """
         logger = resolve_logger(logger, verbose_logger, "InstagramOrganic")
-        self.access_token = access_token
-        self.BASE_URL = "https://graph.facebook.com/v20.0"
         self.MEDIA_FIELDS = (
             "id,caption,timestamp,media_type,media_product_type,permalink"
         )
-        self.logger = (
-            logger if logger else self._build_default_logger()
-        )
+        self.graph = MetaGraphClient(access_token, logger, api_version)
+        self.logger = self.graph.logger
         self.logger.log(
-            "--- EXECUTING Instagram_Organic Class v1.0 "
+            "--- EXECUTING InstagramOrganic Class v2.0 "
             f"- Initialized at {datetime.now(UTC).isoformat()} ---"
         )
 
-    def _build_default_logger(self):
-        """Build a stdlib-based fallback logger that matches the verbose interface.
+    def _list_media(
+        self,
+        ig_account_id: str,
+        since: str,
+        until: str,
+    ) -> list[dict]:
+        """Fetch every media object of the account within a date range.
 
-        Returns:
-            An object with .log() and .critical() methods.
-        """
-        logger = logging.getLogger("Instagram_Organic")
-        if not logger.handlers:
-            logging.basicConfig(level=logging.INFO)
-
-        class _StdlibAdapter:
-            def log(self, message: str) -> None:
-                logger.info(message)
-
-            def critical(self, message: str) -> None:
-                logger.error(message)
-
-        return _StdlibAdapter()
-
-    def _get(self, endpoint: str, params: dict) -> dict:
-        """Execute a single GET request against the Graph API.
-
-        Injects the access token automatically. Raises on HTTP errors
-        or API-level error responses.
+        One paginated listing of /{ig_account_id}/media, with no type filter.
 
         Args:
-            endpoint: Path relative to BASE_URL, e.g. '/17841404958538190/media'.
-            params: Query parameters to include in the request.
+            ig_account_id: The Instagram Business Account ID.
+            since: Start date in 'YYYY-MM-DD' format (inclusive).
+            until: End date in 'YYYY-MM-DD' format (inclusive).
 
         Returns:
-            Parsed JSON response as a dictionary.
-
-        Raises:
-            requests.HTTPError: If the HTTP status code indicates failure.
-            ValueError: If the API returns an error payload.
+            List of media dictionaries of all product types.
         """
-        url = f"{self.BASE_URL}{endpoint}"
-        params = {**params, "access_token": self.access_token}
+        params = {
+            "fields": self.MEDIA_FIELDS,
+            "since": since,
+            "until": until,
+            "limit": 100,
+        }
+        return self.graph.paginate(f"/{ig_account_id}/media", params)
 
-        response = requests.get(url, params=params, timeout=30)
-
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            self.logger.critical(
-                f"_get | HTTP error for {endpoint}: {exc} — "
-                f"Response body: {response.text[:500]}"
-            )
-            raise
-
-        payload = response.json()
-
-        if "error" in payload:
-            error = payload["error"]
-            message = (
-                f"_get | Graph API error for {endpoint}: "
-                f"[{error.get('code')}] {error.get('message')}"
-            )
-            self.logger.critical(message)
-            raise ValueError(message)
-
-        return payload
-
-    def _paginate(self, endpoint: str, params: dict) -> list[dict]:
-        """Fetch all pages of a paginated Graph API endpoint.
-
-        Iterates through cursor-based pagination until no next page exists.
-
-        Args:
-            endpoint: Path relative to BASE_URL.
-            params: Initial query parameters. 'after' cursor is injected
-                automatically on subsequent pages.
-
-        Returns:
-            Flat list of all records across all pages.
-        """
-        results: list[dict] = []
-        page_count = 0
-
-        while True:
-            response = self._get(endpoint, params)
-            data = response.get("data", [])
-            results.extend(data)
-            page_count += 1
-
-            self.logger.log(
-                f"_paginate | Page {page_count}: fetched {len(data)} records "
-                f"(total so far: {len(results)})"
-            )
-
-            paging = response.get("paging", {})
-            cursors = paging.get("cursors", {})
-            after_cursor = cursors.get("after")
-
-            if not paging.get("next") or not after_cursor or len(data) == 0:
-                break
-
-            params = {**params, "after": after_cursor}
-
-        self.logger.log(
-            f"_paginate | Completed: {len(results)} total records across "
-            f"{page_count} page(s) for {endpoint}"
-        )
-        return results
+    @staticmethod
+    def _filter_by_type(media: list[dict], media_product_type: str) -> list[dict]:
+        """Keep the media items of one media_product_type."""
+        return [m for m in media if m.get("media_product_type") == media_product_type]
 
     def _get_media(
         self,
@@ -165,8 +95,8 @@ class InstagramOrganic:
     ) -> list[dict]:
         """Fetch all media of a specific type within a date range.
 
-        Retrieves all media from /{ig_account_id}/media, then filters
-        by media_product_type. Pagination is handled automatically.
+        Lists /{ig_account_id}/media, then filters client side by
+        media_product_type. Pagination is handled automatically.
 
         Args:
             ig_account_id: The Instagram Business Account ID.
@@ -182,18 +112,8 @@ class InstagramOrganic:
             f"{ig_account_id} from {since} to {until}"
         )
 
-        params = {
-            "fields": self.MEDIA_FIELDS,
-            "since": since,
-            "until": until,
-            "limit": 100,
-        }
-
-        all_media = self._paginate(f"/{ig_account_id}/media", params)
-
-        filtered = [
-            m for m in all_media if m.get("media_product_type") == media_product_type
-        ]
+        all_media = self._list_media(ig_account_id, since, until)
+        filtered = self._filter_by_type(all_media, media_product_type)
 
         self.logger.log(
             f"_get_media | {len(filtered)} {media_product_type} items "
@@ -220,7 +140,7 @@ class InstagramOrganic:
             "limit": 100,
         }
 
-        stories = self._paginate(f"/{ig_account_id}/stories", params)
+        stories = self.graph.paginate(f"/{ig_account_id}/stories", params)
 
         self.logger.log(f"_get_stories | {len(stories)} active stories found")
         return stories
@@ -238,8 +158,12 @@ class InstagramOrganic:
 
         Returns:
             Flat dictionary of metric names to their lifetime values.
-            Returns an empty dict if the request fails, so callers can
-            continue processing remaining media.
+            Returns an empty dict if the request fails with an error that is
+            specific to this media item, so callers can continue with the rest.
+
+        Raises:
+            MetaGraphError: On auth, permission or quota errors, which affect
+                every item and must stop the run.
         """
         self.logger.log(
             f"_get_media_insights | Fetching {len(metrics)} metrics for {media_id}"
@@ -251,17 +175,21 @@ class InstagramOrganic:
         }
 
         try:
-            response = self._get(f"/{media_id}/insights", params)
-            flat = self._flatten_insights(response.get("data", []))
+            response = self.graph.get(f"/{media_id}/insights", params)
+        except MetaGraphError as exc:
+            if exc.must_propagate:
+                raise
             self.logger.log(
-                f"_get_media_insights | {media_id} — {len(flat)} metrics extracted"
-            )
-            return flat
-        except (ValueError, requests.HTTPError) as exc:
-            self.logger.critical(
-                f"_get_media_insights | Failed for {media_id}: {exc}. Skipping."
+                f"_get_media_insights | Skipping metrics for {media_id}: "
+                f"API code {exc.api_code}, HTTP {exc.http_status}"
             )
             return {}
+
+        flat = self._flatten_insights(response.get("data", []))
+        self.logger.log(
+            f"_get_media_insights | {media_id} - {len(flat)} metrics extracted"
+        )
+        return flat
 
     def _flatten_insights(self, data: list[dict]) -> dict:
         """Convert a raw insights response into a flat key-value dictionary.
@@ -311,8 +239,11 @@ class InstagramOrganic:
 
         Returns:
             DataFrame where each row is a media object with metadata
-            and insight metrics as columns. Returns empty DataFrame
-            if media_list is empty.
+            and insight metrics as columns. Missing values are None/NaN.
+            Returns empty DataFrame if media_list is empty.
+
+        Raises:
+            MetaGraphError: On auth, permission or quota errors.
         """
         if not media_list:
             self.logger.log(
@@ -323,17 +254,17 @@ class InstagramOrganic:
         records: list[dict] = []
 
         for media in media_list:
-            media_id = media.get("id", "")
+            media_id = media.get("id")
             insights = self._get_media_insights(media_id, metrics)
 
             record = {
                 "media_id": media_id,
                 "ig_account_id": ig_account_id,
-                "media_type": media.get("media_type", ""),
-                "media_product_type": media.get("media_product_type", ""),
-                "caption": media.get("caption", ""),
-                "timestamp": media.get("timestamp", ""),
-                "permalink": media.get("permalink", ""),
+                "media_type": media.get("media_type"),
+                "media_product_type": media.get("media_product_type"),
+                "caption": media.get("caption"),
+                "timestamp": media.get("timestamp"),
+                "permalink": media.get("permalink"),
                 **insights,
             }
             records.append(record)
@@ -435,7 +366,8 @@ class InstagramOrganic:
     ) -> dict[str, pd.DataFrame]:
         """Retrieve FEED, REELS, and STORIES in a single call.
 
-        Orchestrates get_feed, get_reels, and get_stories independently.
+        Lists /media once and splits FEED and REELS client side, instead of
+        paginating the whole listing twice. Stories use their own endpoint.
         Each DataFrame is returned separately to preserve atomicity.
 
         Args:
@@ -453,9 +385,17 @@ class InstagramOrganic:
         since, until = self._resolve_dates(since, until)
         self.logger.log(f"get_all | {ig_account_id} | {since} → {until}")
 
+        media = self._list_media(ig_account_id, since, until)
+        feed = self._filter_by_type(media, "FEED")
+        reels = self._filter_by_type(media, "REELS")
+        self.logger.log(
+            f"get_all | {len(feed)} FEED and {len(reels)} REELS out of "
+            f"{len(media)} media"
+        )
+
         return {
-            "feed": self.get_feed(ig_account_id, feed_metrics, since, until),
-            "reels": self.get_reels(ig_account_id, reels_metrics, since, until),
+            "feed": self._build_dataframe(feed, ig_account_id, feed_metrics),
+            "reels": self._build_dataframe(reels, ig_account_id, reels_metrics),
             "stories": self.get_stories(ig_account_id, story_metrics),
         }
 
@@ -484,4 +424,4 @@ class InstagramOrganic:
         return since, until
 
     def __repr__(self) -> str:
-        return f"<InstagramOrganic page_id={self.page_id}>"
+        return f"<InstagramOrganic api_version={self.graph.api_version}>"

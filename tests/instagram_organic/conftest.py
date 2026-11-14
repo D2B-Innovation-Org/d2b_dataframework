@@ -10,9 +10,9 @@ def ig():
 
 @pytest.fixture
 def feed_metrics():
-    return ["impressions", "reach", "likes"]
+    return ["views", "reach", "likes"]
 
 
 @pytest.fixture
 def story_metrics():
-    return ["impressions", "reach"]
+    return ["views", "reach"]
