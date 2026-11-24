@@ -11,6 +11,8 @@ import d2b_data.Google_Token_MNG
 
 
 class Google_GA4:
+    LIMIT_PER_REQUEST = 250000
+
     def __init__(
         self,
         client_secret: str | None = None,
@@ -20,7 +22,14 @@ class Google_GA4:
         extract_sampling: bool = False,
         intraday_limit: int = 30,
         use_service_account: bool = False,
+        batch_size: int = 5,
+        request_delay: float = 0.0,
     ):
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or not (1 <= batch_size <= 5):
+            raise ValueError("batch_size must be an integer between 1 and 5.")
+        if request_delay < 0:
+            raise ValueError("request_delay must be non-negative.")
+
         self.default_api_name = "analyticsdata"
         self.default_version = "v1beta"
         self.client_secret = client_secret
@@ -28,6 +37,8 @@ class Google_GA4:
         self.auto_paginate = auto_paginate
         self.extract_sampling = extract_sampling
         self.intraday_limit = intraday_limit * 100000
+        self.batch_size = batch_size
+        self.request_delay = float(request_delay)
         self.service = self.create_service(
             self.client_secret, token_json, use_service_account
         )
@@ -93,6 +104,15 @@ class Google_GA4:
             self.extract_sampling = extract_sampling
         return self.extract_sampling
 
+    def set_batch_size(self, batch_size: int = 5):
+        """
+        Sets the number of daily requests grouped per batchRunReports HTTP call (1..5).
+        """
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or not (1 <= batch_size <= 5):
+            raise ValueError("batch_size must be an integer between 1 and 5.")
+        self.batch_size = batch_size
+        return self.batch_size
+
     def create_service(
         self, secrets: str, credentials: str, use_service_account: bool = False
     ):
@@ -111,23 +131,18 @@ class Google_GA4:
         self.debug("Conectado a GA4")
         return self.service
 
-    def _to_df(self, raw_server_response: dict) -> pd.DataFrame:
+    def _report_to_df(self, report_data: dict) -> pd.DataFrame:
         """
-        Transforms the raw GA4 API response into a Pandas DataFrame.
+        Transforms a single GA4 report dict into a Pandas DataFrame.
         """
-        if not raw_server_response.get("reports"):
-            return pd.DataFrame()
-
-        response = raw_server_response.get("reports")[0]
-
         cols = []
-        for dimensions_cols in response.get("dimensionHeaders", []):
+        for dimensions_cols in report_data.get("dimensionHeaders", []):
             cols.append(dimensions_cols.get("name"))
-        for metrics_cols in response.get("metricHeaders", []):
+        for metrics_cols in report_data.get("metricHeaders", []):
             cols.append(metrics_cols.get("name"))
 
         results = []
-        for row in response.get("rows", []):
+        for row in report_data.get("rows", []):
             row_array = []
             for dimension in row.get("dimensionValues", []):
                 row_array.append(dimension.get("value"))
@@ -136,6 +151,29 @@ class Google_GA4:
             results.append(row_array)
 
         return pd.DataFrame(results, columns=cols)
+
+    def _to_df(self, raw_server_response: dict) -> pd.DataFrame:
+        """
+        Transforms the raw GA4 API response into a Pandas DataFrame.
+        """
+        if not raw_server_response.get("reports"):
+            return pd.DataFrame()
+
+        return self._report_to_df(raw_server_response.get("reports")[0])
+
+    def _attach_sampling_info(
+        self, df_report: pd.DataFrame, report_data: dict
+    ) -> pd.DataFrame:
+        """
+        Attaches GA4 sampling metadata columns to a non-empty DataFrame.
+        """
+        sampling_info = self._extract_sampling_info(report_data)
+        df_report["samplesReadCounts"] = sampling_info["samplesReadCounts"]
+        df_report["samplingSpaceSizes"] = sampling_info["samplingSpaceSizes"]
+        df_report["sampling_percentage"] = sampling_info["sampling_percentage"]
+        df_report["sampled"] = sampling_info["sampled"]
+        df_report["dataLossFromOtherRow"] = sampling_info["dataLossFromOtherRow"]
+        return df_report
 
     def debug(self, message: str):
         """Prints debug messages if debug mode is enabled."""
@@ -218,12 +256,7 @@ class Google_GA4:
         # Agregar info de sampling si está activada
         if extract_sampling and not df_report.empty:
             report_data = res.get("reports")[0]
-            sampling_info = self._extract_sampling_info(report_data)
-            df_report["samplesReadCounts"] = sampling_info["samplesReadCounts"]
-            df_report["samplingSpaceSizes"] = sampling_info["samplingSpaceSizes"]
-            df_report["sampling_percentage"] = sampling_info["sampling_percentage"]
-            df_report["sampled"] = sampling_info["sampled"]
-            df_report["dataLossFromOtherRow"] = sampling_info["dataLossFromOtherRow"]
+            self._attach_sampling_info(df_report, report_data)
 
         return df_report
 
@@ -232,36 +265,49 @@ class Google_GA4:
     ):
         """
         Obtains a report with automatic pagination, iterating day by day to avoid sampling and API limits.
+        When batch_size > 1, groups up to batch_size independent 1-day requests per batchRunReports call.
         """
-        # Extraer rango de fechas
         original_date_ranges = query["requests"][0]["dateRanges"]
         start_date = original_date_ranges[0]["startDate"]
         end_date = original_date_ranges[0]["endDate"]
 
         self.debug(f"Paging from {start_date} to {end_date}")
 
-        # Convertir a datetime
         start = datetime.strptime(start_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d")
 
-        # Lista para almacenar DataFrames
-        all_dataframes = []
+        day_strings = []
         current_date = start
-
-        # Iterar día por día
         while current_date <= end:
-            day_str = current_date.strftime("%Y-%m-%d")
-            self.debug(f"Consulting day: {day_str}")
-
-            # Obtener todas las filas del día
-            day_dataframes = self._get_all_rows_for_day(
-                property_id, query, day_str, extract_sampling
-            )
-
-            if day_dataframes:
-                all_dataframes.extend(day_dataframes)
-
+            day_strings.append(current_date.strftime("%Y-%m-%d"))
             current_date += timedelta(days=1)
+
+        all_dataframes = []
+
+        if self.batch_size == 1:
+            for idx, day_str in enumerate(day_strings):
+                if idx > 0 and self.request_delay > 0:
+                    time.sleep(self.request_delay)
+                self.debug(f"Consulting day: {day_str}")
+                day_dataframes = self._get_all_rows_for_day(
+                    property_id, query, day_str, extract_sampling
+                )
+                if day_dataframes:
+                    all_dataframes.extend(day_dataframes)
+        else:
+            chunks = [
+                day_strings[i : i + self.batch_size]
+                for i in range(0, len(day_strings), self.batch_size)
+            ]
+            for idx, chunk in enumerate(chunks):
+                if idx > 0 and self.request_delay > 0:
+                    time.sleep(self.request_delay)
+                self.debug(f"Consulting batch: {chunk[0]}..{chunk[-1]} ({len(chunk)} days)")
+                batch_dataframes = self._get_batch_rows_for_days(
+                    property_id, query, chunk, extract_sampling
+                )
+                if batch_dataframes:
+                    all_dataframes.extend(batch_dataframes)
 
         # Combinar resultados
         if all_dataframes:
@@ -272,19 +318,61 @@ class Google_GA4:
             self.debug("No data found for the specified period.")
             return pd.DataFrame()
 
+    def _get_batch_rows_for_days(
+        self,
+        property_id: str,
+        query: dict,
+        day_strings: list[str],
+        extract_sampling: bool = False,
+    ) -> list[pd.DataFrame]:
+        """
+        Fetches up to batch_size independent 1-day reports in a single batchRunReports call,
+        falling back to per-day offset pagination only for days that reach LIMIT_PER_REQUEST.
+        """
+        batch_query = self._create_batch_query(query, day_strings, offset=0)
+        raw_response = self._get_report_raw(property_id, batch_query)
+        reports = raw_response.get("reports", [])
+
+        batch_dataframes = []
+        limit_per_request = self.LIMIT_PER_REQUEST
+
+        for day_str, report_data in zip(day_strings, reports):
+            df_day = self._report_to_df(report_data)
+            if df_day.empty:
+                continue
+
+            if extract_sampling:
+                self._attach_sampling_info(df_day, report_data)
+
+            batch_dataframes.append(df_day)
+
+            if len(df_day) >= limit_per_request:
+                overflow_dfs = self._get_all_rows_for_day(
+                    property_id,
+                    query,
+                    day_str,
+                    extract_sampling,
+                    start_offset=limit_per_request,
+                )
+                if overflow_dfs:
+                    batch_dataframes.extend(overflow_dfs)
+
+        return batch_dataframes
+
     def _get_all_rows_for_day(
         self,
         property_id: str,
         query: dict,
         day_str: str,
         extract_sampling: bool = False,
+        start_offset: int = 0,
     ):
         """
         Obtains all rows for a specific day using offset
         """
         day_dataframes = []
-        offset = 0
-        limit_per_request = 250000
+        offset = start_offset
+        limit_per_request = self.LIMIT_PER_REQUEST
 
         while True:
             # Crear query para este día con offset
@@ -315,6 +403,21 @@ class Google_GA4:
             self.debug(f" Total rows for the day: {total_rows}")
 
         return day_dataframes
+
+    def _create_batch_query(
+        self, original_query: dict, day_strings: list[str], offset: int = 0
+    ) -> dict:
+        """
+        Builds a batchRunReports payload containing one independent 1-day request per date.
+        """
+        base_request = original_query["requests"][0]
+        requests = []
+        for day_str in day_strings:
+            req = copy.deepcopy(base_request)
+            req["dateRanges"] = [{"startDate": day_str, "endDate": day_str}]
+            req["offset"] = offset
+            requests.append(req)
+        return {"requests": requests}
 
     def _create_daily_query(
         self, original_query: dict, start_date: str, end_date: str
