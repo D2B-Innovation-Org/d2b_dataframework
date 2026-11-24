@@ -1,23 +1,24 @@
-import logging
 from datetime import UTC, datetime
+from typing import Optional
 
 import pandas as pd
-import requests
+from d2b_data.meta_graph import GRAPH_API_VERSION, MetaGraphClient, MetaGraphError
 from d2b_data.workflow_logger import resolve_logger
 
 
 class FacebookOrganic:
     """Abstraction layer for the Facebook Graph API Page Insights (organic).
 
-    Handles authentication, pagination, post retrieval, and post-level
-    insights extraction. Designed to mirror the interface of Facebook_Marketing
-    so it can be dropped into the same ETL patterns.
+    Handles post retrieval and post-level insights extraction. HTTP, auth,
+    retries and pagination live in ``MetaGraphClient`` (``self.graph``).
+
+    Data is raw: a value the API does not return is None, never a made-up 0
+    or empty string.
 
     Attributes:
-        page_id: Facebook Page ID to query.
-        access_token: Page Access Token with pages_read_engagement
-            and read_insights permissions.
-        base_url: Base URL for the Graph API, pinned to v25.0.
+        graph: Shared Graph API client (token, session, API version).
+        logger: Logger with .log() and .critical().
+        POST_FIELDS: Fields requested for every post.
     """
 
     def __init__(
@@ -26,136 +27,29 @@ class FacebookOrganic:
         logger=None,
         *,
         verbose_logger=None,
+        api_version: str = GRAPH_API_VERSION,
     ) -> None:
-        """Initialize the Facebook_Organic client.
+        """Initialize the FacebookOrganic client.
+
+        The Page ID is not a constructor argument: pass it to each method so
+        one instance can serve several Pages.
 
         Args:
-            page_id: The numeric Facebook Page ID.
-            access_token: A valid Page Access Token.
+            access_token: A valid Page Access Token with pages_read_engagement
+                and read_insights permissions.
             logger: Optional logger instance. Must expose a .log()
                 and .critical() method. If None, falls back to stdlib logging.
+            verbose_logger: Deprecated alias of ``logger``.
+            api_version: Graph API version; defaults to GRAPH_API_VERSION.
         """
         logger = resolve_logger(logger, verbose_logger, "FacebookOrganic")
-        self.access_token = access_token
         self.POST_FIELDS = "id,message,created_time,like_count,comments_count,shares,comments.summary(true),reactions.summary(true)"
-        self.BASE_URL = "https://graph.facebook.com/v25.0"
-        self.logger = (
-            logger if logger else self._build_default_logger()
-        )
+        self.graph = MetaGraphClient(access_token, logger, api_version)
+        self.logger = self.graph.logger
         self.logger.log(
-            "--- EXECUTING FacebookOrganic Class v1.0 "
+            "--- EXECUTING FacebookOrganic Class v2.0 "
             f"- Initialized at {datetime.now(UTC).isoformat()} ---"
         )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _build_default_logger(self):
-        """Build a stdlib-based fallback logger that matches the verbose interface.
-
-        Returns:
-            An object with .log() and .critical() methods.
-        """
-        logger = logging.getLogger("Facebook_Organic")
-        if not logger.handlers:
-            logging.basicConfig(level=logging.INFO)
-
-        class _StdlibAdapter:
-            def log(self, message: str) -> None:
-                logger.info(message)
-
-            def critical(self, message: str) -> None:
-                logger.error(message)
-
-        return _StdlibAdapter()
-
-    def _get(self, endpoint: str, params: dict) -> dict:
-        """Execute a single GET request against the Graph API.
-
-        Injects the access token automatically. Raises on HTTP errors
-        or API-level error responses.
-
-        Args:
-            endpoint: Path relative to BASE_URL, e.g. '/302064363144019/posts'.
-            params: Query parameters to include in the request.
-
-        Returns:
-            Parsed JSON response as a dictionary.
-
-        Raises:
-            requests.HTTPError: If the HTTP status code indicates failure.
-            ValueError: If the API returns an error payload.
-        """
-        url = f"{self.BASE_URL}{endpoint}"
-        params = {**params, "access_token": self.access_token}
-
-        response = requests.get(url, params=params, timeout=30)
-
-        try:
-            response.raise_for_status()
-        except requests.HTTPError as exc:
-            self.logger.critical(
-                f"_get | HTTP error for {endpoint}: {exc} — "
-                f"Response body: {response.text[:500]}"
-            )
-            raise
-
-        payload = response.json()
-
-        if "error" in payload:
-            error = payload["error"]
-            message = (
-                f"_get | Graph API error for {endpoint}: "
-                f"[{error.get('code')}] {error.get('message')}"
-            )
-            self.logger.critical(message)
-            raise ValueError(message)
-
-        return payload
-
-    def _paginate(self, endpoint: str, params: dict) -> list[dict]:
-        """Fetch all pages of a paginated Graph API endpoint.
-
-        Iterates through cursor-based pagination until no next page exists.
-
-        Args:
-            endpoint: Path relative to BASE_URL.
-            params: Initial query parameters. 'after' cursor is injected
-                automatically on subsequent pages.
-
-        Returns:
-            Flat list of all records across all pages.
-        """
-        results: list[dict] = []
-        page_count = 0
-
-        while True:
-            response = self._get(endpoint, params)
-            data = response.get("data", [])
-            results.extend(data)
-            page_count += 1
-
-            self.logger.log(
-                f"_paginate | Page {page_count}: fetched {len(data)} records "
-                f"(total so far: {len(results)})"
-            )
-
-            paging = response.get("paging", {})
-            cursors = paging.get("cursors", {})
-            after_cursor = cursors.get("after")
-
-            # Stop if there is no next page or the current page returned nothing
-            if not paging.get("next") or not after_cursor or len(data) == 0:
-                break
-
-            params = {**params, "after": after_cursor}
-
-        self.logger.log(
-            f"_paginate | Completed: {len(results)} total records across "
-            f"{page_count} page(s) for {endpoint}"
-        )
-        return results
 
     def _flatten_insights(self, data: list[dict]) -> dict:
         """Convert a raw insights response into a flat key-value dictionary.
@@ -197,6 +91,23 @@ class FacebookOrganic:
 
         return flat
 
+    @staticmethod
+    def _nested_count(value: object, *path: str) -> Optional[int]:
+        """Read a count from a nested dict, or None when it is not there.
+
+        Args:
+            value: The raw field, e.g. ``{"count": 7}``; None when absent.
+            *path: Keys to follow inside ``value``.
+
+        Returns:
+            The count, or None if the field or any key is missing.
+        """
+        for key in path:
+            if not isinstance(value, dict):
+                return None
+            value = value.get(key)
+        return value if isinstance(value, int) else None
+
     # ------------------------------------------------------------------
     # Public methods
     # ------------------------------------------------------------------
@@ -213,8 +124,12 @@ class FacebookOrganic:
             until: End date in 'YYYY-MM-DD' format (inclusive).
 
         Returns:
-            List of post dictionaries as returned by the Graph API,
-            with shares normalized to an integer count.
+            List of post dictionaries as returned by the Graph API, with
+            shares, comments and reactions flattened to integer counts (None
+            when the API did not return them).
+
+        Raises:
+            MetaGraphError: On Graph API errors.
         """
         self.logger.log(f"get_posts | Fetching posts from {since} to {until}")
 
@@ -225,29 +140,19 @@ class FacebookOrganic:
             "limit": 100,
         }
 
-        posts = self._paginate(f"/{page_id}/posts", params)
+        posts = self.graph.paginate(f"/{page_id}/posts", params)
 
-        # Normalize shares: API returns {"count": N} or is absent
+        # Flatten the nested counters. A counter the API did not return is
+        # None: Facebook omits them when it has nothing to report, and a
+        # silent 0 would be indistinguishable from a real zero.
         for post in posts:
-            raw_shares = post.get("shares")
-            if isinstance(raw_shares, dict):
-                post["shares"] = raw_shares.get("count", 0)
-            elif raw_shares is None:
-                post["shares"] = 0
-
-            raw_comments = post.get("comments")
-            if isinstance(raw_comments, dict):
-                post["comments"] = raw_comments.get("summary", {}).get("total_count", 0)
-            elif raw_comments is None:
-                post["comments"] = 0
-
-            raw_reactions = post.get("reactions")
-            if isinstance(raw_reactions, dict):
-                post["reactions"] = raw_reactions.get("summary", {}).get(
-                    "total_count", 0
-                )
-            elif raw_reactions is None:
-                post["reactions"] = 0
+            post["shares"] = self._nested_count(post.get("shares"), "count")
+            post["comments"] = self._nested_count(
+                post.get("comments"), "summary", "total_count"
+            )
+            post["reactions"] = self._nested_count(
+                post.get("reactions"), "summary", "total_count"
+            )
 
         self.logger.log(f"get_posts | Retrieved {len(posts)} posts")
         return posts
@@ -261,8 +166,12 @@ class FacebookOrganic:
 
         Returns:
             Flat dictionary of metric names to their lifetime values.
-            Returns an empty dict if the request fails, so callers can
-            continue processing remaining posts.
+            Returns an empty dict if the request fails with an error that is
+            specific to this post, so callers can continue with the rest.
+
+        Raises:
+            MetaGraphError: On auth, permission or quota errors, which affect
+                every post and must stop the run.
         """
 
         self.logger.log(
@@ -275,22 +184,29 @@ class FacebookOrganic:
         }
 
         try:
-            response = self._get(f"/{post_id}/insights", params)
-            flat = self._flatten_insights(response.get("data", []))
+            response = self.graph.get(f"/{post_id}/insights", params)
+        except MetaGraphError as exc:
+            if exc.must_propagate:
+                raise
             self.logger.log(
-                f"get_post_insights | {post_id} — {len(flat)} metrics extracted"
-            )
-            return flat
-        except (ValueError, requests.HTTPError) as exc:
-            self.logger.critical(
-                f"get_post_insights | Failed for {post_id}: {exc}. Skipping."
+                f"get_post_insights | Skipping metrics for {post_id}: "
+                f"API code {exc.api_code}, HTTP {exc.http_status}"
             )
             return {}
+
+        flat = self._flatten_insights(response.get("data", []))
+        self.logger.log(
+            f"get_post_insights | {post_id} - {len(flat)} metrics extracted"
+        )
+        return flat
 
     def get_report_dataframe(
         self, page_id: str, start_date: str, end_date: str, metrics: list[str]
     ) -> pd.DataFrame:
         """Build a combined DataFrame of posts and their insight metrics.
+
+        Posts whose insights could not be read keep their row, with the
+        metric columns missing (NaN/None).
 
         Args:
             page_id: The ID of the Facebook page.
@@ -302,6 +218,10 @@ class FacebookOrganic:
             DataFrame where each row is a post, with columns for post
             metadata (message, created_time, etc.) and all insight metrics.
             Returns an empty DataFrame if no posts are found.
+
+        Raises:
+            ValueError: If a date is missing or has an unsupported format.
+            MetaGraphError: On auth, permission or quota errors.
         """
 
         if start_date:
@@ -353,18 +273,18 @@ class FacebookOrganic:
         records: list[dict] = []
 
         for post in posts:
-            post_id = post.get("id", "")
+            post_id = post.get("id")
             insights = self.get_post_insights(post_id, metrics=metrics)
 
             record = {
                 "post_id": post_id,
                 "page_id": page_id,
-                "message": post.get("message", ""),
-                "created_time": post.get("created_time", ""),
-                "like_count": post.get("like_count", 0),
-                "comments": post.get("comments", 0),
-                "reactions": post.get("reactions", 0),
-                "shares": post.get("shares", 0),
+                "message": post.get("message"),
+                "created_time": post.get("created_time"),
+                "like_count": post.get("like_count"),
+                "comments": post.get("comments"),
+                "reactions": post.get("reactions"),
+                "shares": post.get("shares"),
                 **insights,
             }
             records.append(record)
@@ -375,5 +295,5 @@ class FacebookOrganic:
         self.logger.log(f"get_report_dataframe | Done. DataFrame shape: {df.shape}")
         return df
 
-    def __repr__(self):
-        return f"<FacebookOrganic Client version: {self.BASE_URL}>"
+    def __repr__(self) -> str:
+        return f"<FacebookOrganic api_version={self.graph.api_version}>"
